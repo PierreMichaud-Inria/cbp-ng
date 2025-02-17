@@ -1,0 +1,19 @@
+#!/bin/bash
+
+FILE=$1
+shift
+EXTRA=$@
+
+NAME="${FILE%.*}"
+
+if [ "$NAME" == "$FILE" ]; then
+    FILE="${FILE}.cpp"
+fi
+
+COMPILE="g++ -std=c++20"
+OPT="-O3"
+FLAGS="-Werror -Werror=old-style-cast"
+
+set -x
+
+$COMPILE -o $NAME $FILE $OPT $FLAGS $EXTRA
