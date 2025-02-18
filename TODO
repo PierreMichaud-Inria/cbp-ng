@@ -1,0 +1,23 @@
+* missing hardware models
+ - flip-flop (for class reg)
+ - ROM
+ - carry-save adder
+ - integer multiplier
+ - (floating-point operators)
+ 
+* missing operations: >, <, >=, <=, *, <<, >>, %, /
+
+* SRAM energy/delay/area model is for single R/W port; class ram currently does not model this constraint
+
+* spatial location for values + corresponding wire delay/energy
+
+* fan-out (how many times a value is read)
+
+* general reduction primitive for class arr
+
+* general scan primitive for class arr (https://en.wikipedia.org/wiki/Prefix_sum)
+
+* utility for printing the energy of a function
+
+
+
