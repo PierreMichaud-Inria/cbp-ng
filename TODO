@@ -9,6 +9,8 @@
 
 * SRAM energy/delay/area model is for single R/W port; class ram currently does not model this constraint
 
+* extend class ram to hold arr objects
+
 * spatial location for values + corresponding wire delay/energy
 
 * fan-out (how many times a value is read)
