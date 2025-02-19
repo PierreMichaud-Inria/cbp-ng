@@ -1,10 +1,13 @@
 #include "harcom.hpp"
 
+using namespace hcm;
+
+
 template<u64 LOGN>
 struct gshare : predictor {
   static constexpr u64 N = 1<<LOGN;
   reg<LOGN> ghist;
-  ram<N,2> pht;
+  ram<val<2>,N> pht;
   reg<LOGN> index;
   reg<2> ctr;
   

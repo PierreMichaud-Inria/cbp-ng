@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <tuple>
 #include <array>
+#include <vector>
 
 
 class simulator; // has access to private members of class "val"
@@ -65,6 +66,22 @@ namespace hcm {
   concept action = requires (T f) {f();} || requires (T f, u64 i) {f(i);};
 
   template<u64 N, arith T> class val;
+  template<u64 N, arith T> class reg;
+  
+  template<typename T>
+  concept valtype = requires(const T &x) {[]<u64 N, arith U>(const val<N,U>&){}(x);};
+
+  template<valtype T, u64 N> class arr;
+
+  template<typename T>
+  concept arrtype = requires(const T &x) {[]<valtype U, u64 N>(const arr<U,N>&){}(x);};
+
+  template<typename T>
+  concept regtype = requires(const T &x) {[]<u64 N, arith U>(const reg<N,U>&){}(x);};
+  
+  template<typename T>
+  concept datatype = (valtype<T> || arrtype<T>) && ! regtype<T> && ! regtype<typename T::type>;
+
   
   constexpr auto min(auto a, auto b)
   {
@@ -1670,9 +1687,6 @@ namespace hcm {
   // ###########################
 
   template<typename T>
-  concept valtype = requires(const T &x) {[]<u64 N, arith U>(const val<N,U>&){}(x);};
-
-  template<typename T>
   struct base_impl {};
 
   template<arith T>
@@ -1753,6 +1767,7 @@ namespace hcm {
 
   class exec_control {
     template<u64,arith> friend class val;
+    template<datatype,u64> friend class ram;
     friend class globals;
     template<u64 N, action T> friend void execute(val<N,u64>,T);
   private:
@@ -1763,9 +1778,7 @@ namespace hcm {
     void set_state(bool cond, u64 t=0) {active = cond; time = t;}
   public:
     exec_control() : active(true), time(0) {}
-  };
-
-  inline exec_control exec;
+  } exec;
 
   
   // ###########################
@@ -1775,9 +1788,10 @@ namespace hcm {
     friend class globals;
     friend class ::simulator;
     template<u64,arith> friend class reg;
-    template<u64,u64,arith> friend class ram;
+    template<datatype,u64> friend class ram;
   private:
-    T data;
+    T data = 0;
+    global() : data(0) {}
     global(const global&) = default;
     global& operator= (const global& x) = default;
     void operator+= (T i) {data+=i;}
@@ -1798,30 +1812,27 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
-    template<u64,u64,arith> friend class ram;
+    template<datatype,u64> friend class ram;
     friend class proxy;
     friend class ::simulator;
   public:
-    global<u64> storage = 0;
-    global<f64> energy_fJ = 0;
-    //global<u64> transistors = 0;
+    global<u64> clock_cycle_ps;
+    global<u64> storage;
+    global<f64> energy_fJ;
+    //global<u64> transistors;
   private:
     void update_storage(u64 n) {storage += n;}
     void update_energy(f64 e) {if (exec.active) energy_fJ += e;}
 
-    void update(const circuit &c)
+    void update_metrics(const circuit &c)
     {
       //transistors += c.t;
       update_energy(c.energy());
     }
-  };
+  } panel;
 
-  globals metrics;
-  
   
   // ###########################
-
-  template<valtype T, u64 N> class arr;
 
   
   template<u64 N, arith T = u64>
@@ -1833,7 +1844,7 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<valtype, u64> friend class arr;
-    template<u64,u64,arith> friend class ram;
+    template<datatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     friend class proxy;
     friend class ::simulator;
@@ -1933,34 +1944,34 @@ namespace hcm {
       return {(get() >> i) & 1, time()};
     }
     
-    val<N> reverse() requires std::unsigned_integral<T>
+    val<N> reverse() const requires std::unsigned_integral<T>
     {
       // no transistors
       return {reverse_bits(get()) >> (sizeof(T)*8-N), time()};
     }
 
-    auto ones()
+    auto ones() const
     {
       // TODO: transistors & time
       auto n = std::popcount(truncate<N>(get()));
       return val<std::bit_width(N)> {n};
     }
 
-    val<N> priority_encode() requires std::unsigned_integral<T>
+    val<N> priority_encode() const requires std::unsigned_integral<T>
     {
       constexpr circuit c = priority_encoder<N>;
       u64 x = get();
       u64 y = x & (x^(x-1));
-      metrics.update(c);
+      panel.update_metrics(c);
       return {y,time()+c.delay()};
     }
 
     template<u64 M>
-    auto make_array()
+    auto make_array() const
     {
       // broadcast (TODO: wires)
       arr<valt<val>,M> a;
-      for (int i=0; i<M; i++) {
+      for (u64 i=0; i<M; i++) {
 	a[i] = *this;
       }
       return a;
@@ -1977,9 +1988,10 @@ namespace hcm {
 
     static auto get(const arith auto& x) {return x;}
     static auto get(const valtype auto& x) {return x.get();}
+    static auto time(const arith auto& x) {return 0;}
     static auto time(const valtype auto& x) {return x.time();}
     static void set_time(valtype auto& x, arith auto t) {x.set_time(t);}
-    static void update_metrics(const circuit &c) {metrics.update(c);}
+    static void update_metrics(const circuit &c) {panel.update_metrics(c);}
     
     template<valtype T1, valtype T2>
     static auto concatenate(const T1& x1, const T2& x2)
@@ -1991,7 +2003,7 @@ namespace hcm {
     
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
-    template<u64,u64,arith> friend class ram;
+    template<datatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     
     template<valtype T1, valtype T2>
@@ -2121,32 +2133,40 @@ namespace hcm {
     void create()
     {
       assert(("all storage (reg,ram) must have the same lifetime",!storage_destroyed));
-      metrics.update_storage(N);
+      panel.update_storage(N);
     }
     
   public:
-
+    
     reg() : val<N,T>() {create();}
-
-    reg(const reg &x) = delete;
 
     reg(const std::convertible_to<T> auto &x) : val<N,T>(x) {create();}
 
     template<u64 M, arith U>
     reg(const val<M,U> &x) : val<N,T>(x) {create();}
 
-    ~reg() {storage_destroyed = true;}
-
-    void operator= (const auto &x)
+    ~reg()
     {
-      val<N,T>::operator=(x);
+      storage_destroyed = true;
+    }
+
+    void operator= (const auto &other)
+    {
+      val<N,T>::operator=(other);
       // TODO: write energy
     }
+
+    reg(const reg &other)
+    {
+      *this = other;
+      create();
+    }
+
   };
 
 
   // ###########################
-  
+
   template<typename T, typename X, typename Y>
   concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
 
@@ -2154,27 +2174,62 @@ namespace hcm {
   template<valtype T, u64 N>
   class arr {
     template<valtype,u64> friend class arr;
-  private:
-    T a[N];
+    template<u64,arith> friend class val;
     
+  private:
+
+    T a[N];
+
+    void copy_from(const arr &other)
+    {
+      for (u64 i=0; i<N; i++) a[i] = other.a[i];
+    }
+    
+    void operator= (const arr &other) requires (! regtype<T>)
+    {
+      copy_from(other);
+    }
+
     void operator&() = delete;
+
+    u64 time() const
+    {
+      u64 t = 0;
+      for (u64 i=0; i<N; i++) {
+	t = max(t,a[i].time());
+      }
+      return t;
+    }
+    
+    void synchronize(u64 t)
+    {
+      for (u64 i=0; i<N; i++) a[i].set_time(t);
+    }
     
   public:
 
     static constexpr u64 size = N;
+    using type = T;
 
     arr() {}
     
-    template<typename ...U>
+    template<std::convertible_to<T> ...U>
     arr(U... args) : a{args...} {}
     
     arr(unaryfunc<u64,T> auto f)
     {
-      for (int i=0; i<N; i++) {
+      for (u64 i=0; i<N; i++) {
 	a[i] = f(i);
       }
     }
 
+    arr(const arr &other) {copy_from(other);}    
+
+    void operator= (const arr &other) requires (regtype<T>)
+    {
+      copy_from(other);
+    }
+    
     T get(u64 i) const
     {
       assert(i<N);
@@ -2192,13 +2247,12 @@ namespace hcm {
 
     void print(std::string s = "", std::ostream & os = std::cout) const
     {
-      for (int i=0; i<N; i++) a[i].print(s+std::to_string(i)+": ",os);
+      for (u64 i=0; i<N; i++) a[i].print(s+std::to_string(i)+": ",os);
     }
 
-    template<bool ALL=0>
     void printb(std::string s = "", std::ostream & os = std::cout) const
     {
-      for (int i=0; i<N; i++) a[i].printb(s+std::to_string(i)+": ",os);
+      for (u64 i=0; i<N; i++) a[i].printb(s+std::to_string(i)+": ",os);
     }
 
     auto concat() const requires std::unsigned_integral<typename T::type>
@@ -2206,13 +2260,11 @@ namespace hcm {
       // element 0 is at rightmost position
       // no transistors (TODO: wires)
       static_assert(N!=0);
-      u64 t = 0;
       u64 y = 0;
-      for (int i=N-1; i>=0; i--) {
-	t = max(t,a[i].time());
+      for (i64 i=N-1; i>=0; i--) {
 	y = (y<<T::size) | a[i].get();
       }
-      return val<N*T::size> {y,t};
+      return val<N*T::size> {y,time()};
     }
 
     auto append(const std::convertible_to<valt<T>> auto& x) const
@@ -2269,14 +2321,12 @@ namespace hcm {
     {
       if constexpr (N>=2) {
 	static constexpr circuit c = XOR<N> * T::size;
-	metrics.update(c);
-	auto t = a[0].time();
+	panel.update_metrics(c);
 	auto x = a[0].get();
 	for (int i=1; i<N; i++) {
-	  t = max(t,a[i].time());
 	  x ^= a[i].get();
 	}
-	t += c.d;
+	u64 t = time() + c.delay();
 	return {x,t};
       } else if constexpr (N==1) {
 	// no transistors
@@ -2286,74 +2336,101 @@ namespace hcm {
       }
     }
   };
-  
+
   
   // ###########################
-  
-  template<u64 N, u64 M, arith T = u64>
-  class ram {
+
+  template<datatype T, u64 N>
+  class ram;
+
+
+  template<datatype T, u64 N> requires valtype<T>
+  class ram<T,N> {
+    // bandwidth = one read per clock cycle
   public:
-    using datatype = val<M,T>;
-    static constexpr u64 size = N * M;
-    static constexpr sram<N,M> static_ram {};
-    
+    using type = T;
+    using valuetype = T::type;
+    static constexpr u64 datawidth = T::size;
+    using static_ram = sram<N,datawidth>;
+
   private:
-    datatype data[N] = {0};
-    T old_data[N] = {0};
+    valuetype data[N];
+    u64 next_read_time = 0;
+
+    struct writeop {
+      u64 addr = 0;
+      valuetype dataval = 0;
+      u64 t = 0;
+      
+      bool operator< (const writeop &rhs) {return t > rhs.t;}
+
+      void commit(ram &mem) const
+      {
+	assert(addr<N);
+	mem.data[addr] = dataval;
+      }
+    };
+    
+    std::vector<writeop> writes; // pending writes
 
     ram(const ram &) = delete;
     ram& operator= (const ram&) = delete;
     void operator& () = delete;
 
-    u64 time(const auto& x) const
+  public:
+    ram() {panel.update_storage(static_ram::NBITS);}
+
+    ~ram()
     {
-      if constexpr (valtype<decltype(x)>) {
-	return x.time();
-      } else {
-	return 0;
+      storage_destroyed = true;
+      while (! writes.empty()) {
+	writes[0].commit(*this);
+	std::pop_heap(writes.begin(),writes.end());
+	writes.pop_back();
       }
+    }
+
+    void write(const ival auto& address, const std::convertible_to<T> auto& dataval)
+    {
+      if (! exec.active) return;
+      panel.update_energy(static_ram::EWRITE);
+      u64 t = max(proxy::time(address),proxy::time(dataval)); // TODO: write latency?
+      writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
+      std::push_heap(writes.begin(),writes.end());
+    }
+
+    T read(const ival auto& address)
+    {
+      if (! exec.active) return {};
+      panel.update_energy(static_ram::EREAD);
+      u64 t = max(proxy::time(address),next_read_time); // time at which the read starts
+      while (! writes.empty() && writes[0].t <= t) {
+	writes[0].commit(*this);
+	std::pop_heap(writes.begin(),writes.end());
+	writes.pop_back();
+      }
+      next_read_time = t + panel.clock_cycle_ps;
+      u64 addr = proxy::get(address);
+      assert(addr<N);
+      t += std::llround(static_ram::LATENCY); // time at which the read completes
+      T readval = {data[addr],t};
+      return readval;
     }
     
-  public:
-
-    ram() {metrics.update_storage(static_ram.NBITS);}
-
-    ~ram() {storage_destroyed = true;}
-
-    void write(const ival auto& address, const std::convertible_to<datatype> auto& dataval)
-    {
-      metrics.update_energy(static_ram.EWRITE);
-      u64 i = proxy::get(address);
-      assert(i<N);
-      u64 t = max(time(address),time(dataval)); // TODO: write latency?
-      if (t >= data[i].time()) {
-	// overwriting
-	old_data[i] = data[i].get();
-	data[i] = {proxy::get(dataval),t};
-      } else {
-	// overwritten
-      }
-    }
-
-    datatype read(const ival auto& address) const
-    {
-      metrics.update_energy(static_ram.EREAD);
-      auto i = proxy::get(address);
-      assert(i<N);
-      u64 t = time(address);
-      T readval = (t>= data[i].time())? data[i].get() : old_data[i];
-      t += std::llround(static_ram.LATENCY);
-      return {readval,t};
-    }
-
     void reset()
     {
-      for (auto &v : old_data) v  = 0;
-      for (auto &v : data) v = 0;
-      metrics.update_energy(N*M*2*INV.e);
+      if (! exec.active) return;
+      panel.update_energy(static_ram::NBITS*2*INV.e);
+      for (auto &v : data) v = 0; // instantaneous (FIXME?)
+      writes.clear();
+    }
+
+    void print(std::string s = "", std::ostream & os = std::cout)
+    {
+      static_ram::print(s,os);
     }
   };
-
+  
 
   // ###########################
   
@@ -2527,7 +2604,7 @@ namespace hcm {
   {
     // TODO
     return {proxy::get(x1) <= x2, proxy::time(x1)};
-  }  
+  }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator<= (const T1& x1, const T2& x2)
@@ -2548,6 +2625,7 @@ namespace hcm {
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
   valt<T1,T2> operator+ (const T1& x1, const T2& x2)
   {
+    if (x2==0) return x1;
     static constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = proxy::time(x1) + c.delay();
@@ -2583,6 +2661,7 @@ namespace hcm {
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
   valt<T1,T2> operator- (const T1& x1, const T2& x2)
   {
+    if (x2==0) return x1;
     static constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = proxy::time(x1) + c.delay();
@@ -2592,6 +2671,7 @@ namespace hcm {
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
   valt<T1,T2> operator- (const T1& x1, const T2& x2)
   {
+    if (x1==0) return -x2;
     static constexpr circuit c = INC<valt<T2>::size>;
     proxy::update_metrics(c);
     auto t = proxy::time(x2) + c.delay();
@@ -2819,6 +2899,9 @@ namespace hcm {
     for (u64 i=0; i<N; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
+      //if (!cond) continue;
+      // to prevent cheating, we execute the action even when the condition is false
+      // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<T>) {
 	f();
       } else {

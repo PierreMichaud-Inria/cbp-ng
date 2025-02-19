@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include "harcom.hpp"
 
+using namespace hcm;
+
 
 template<u64 MAXL>
 struct path_history {
@@ -54,10 +56,10 @@ struct tage : predictor {
   static constexpr u64 NB = 1<<LOGB;
   static constexpr u64 MINHIST = 3;
   
-  ram<NB,2> bim; // bimodal table
-  ram<NG,TAGW> gtag[NUMG]; // global tables tags
-  ram<NG,CTR> gctr[NUMG]; // global tables counters
-  ram<NG,1> ubit[NUMG]; // "useful" bits
+  ram<val<2>,NB> bim; // bimodal table
+  ram<val<TAGW>,NG> gtag[NUMG]; // global tables tags
+  ram<val<CTR>,NG> gctr[NUMG]; // global tables counters
+  ram<val<1>,NG> ubit[NUMG]; // "useful" bits
   path_history<GHIST> ph;
   reg<LOGB> bi; // bimodal table index
   arr<reg<LOGG>,NUMG> gi; // global tables indexes

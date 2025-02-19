@@ -13,8 +13,6 @@
 
 * spatial location for values + corresponding wire delay/energy
 
-* fan-out (how many times a value is read)
-
 * general reduction primitive for class arr
 
 * general scan primitive for class arr (https://en.wikipedia.org/wiki/Prefix_sum)
