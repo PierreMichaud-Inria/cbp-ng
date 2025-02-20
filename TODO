@@ -9,15 +9,10 @@
 
 * SRAM energy/delay/area model is for single R/W port; class ram currently does not model this constraint
 
-* extend class ram to hold arr objects
-
 * spatial location for values + corresponding wire delay/energy
 
 * general reduction primitive for class arr
 
 * general scan primitive for class arr (https://en.wikipedia.org/wiki/Prefix_sum)
 
-* utility for printing the energy of a function
-
-
-
+* CAM?

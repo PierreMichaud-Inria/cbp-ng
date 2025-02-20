@@ -52,9 +52,9 @@ auto update_ctr(val<N> ctr, val<1> incr)
 template<u64 NUMG, u64 LOGG, u64 LOGB, u64 TAGW, u64 GHIST>
 struct tage : predictor {
   static constexpr u64 CTR = 3;
+  static constexpr u64 MINHIST = 3;
   static constexpr u64 NG = 1<<LOGG;
   static constexpr u64 NB = 1<<LOGB;
-  static constexpr u64 MINHIST = 3;
   
   ram<val<2>,NB> bim; // bimodal table
   ram<val<TAGW>,NG> gtag[NUMG]; // global tables tags
@@ -73,7 +73,7 @@ struct tage : predictor {
   reg<NUMG+1> match1; // longest match
   reg<NUMG+1> match2; // second longest match
   reg<1> prediction;
-  
+
   static constexpr auto HLEN = [] () {
     // geometric history lengths
     // table 0 is the rightmost table and has the longest history    
@@ -90,6 +90,9 @@ struct tage : predictor {
 
   tage()
   {
+    std::cout << "TAGE global entries: " << NUMG << " x " << NG << std::endl;
+    std::cout << "TAGE bimodal entries: " << NB << std::endl;
+    std::cout << "TAGE global entry tag length: " << TAGW << std::endl;
     std::cout << "TAGE history lengths: ";
     for (int i=0; i<NUMG; i++) std::cout << HLEN[i] << " ";
     std::cout << std::endl;
@@ -97,6 +100,7 @@ struct tage : predictor {
   
   val<1> predict(val<64> pc)
   {
+    // TODO: use altpred when low conf prediction
     // compute indexes
     bi = pc;
     static_loop<NUMG> ([&]<int I>() {
@@ -171,8 +175,9 @@ struct tage : predictor {
       gctr[i].write(gi[i],initctr);
     };
     execute(allocmask,allocate);
-    // if all post entries have the u bit set, reset the u bits
-    val<NUMG> uclearmask = (allocmask==0).template make_array<NUMG>().concat();
+    // if all post entries have the u bit set, reset their u bits
+    val<1> noalloc = (candallocmask == 0);
+    val<NUMG> uclearmask = postmask & noalloc.make_array<NUMG>().concat();
     execute(uclearmask,[&](int i){ubit[i].write(gi[i],0);});
     // update path history
     ph.update(concat(val<5>(pc),dir));

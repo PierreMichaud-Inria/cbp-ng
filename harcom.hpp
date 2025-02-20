@@ -80,7 +80,7 @@ namespace hcm {
   concept regtype = requires(const T &x) {[]<u64 N, arith U>(const reg<N,U>&){}(x);};
   
   template<typename T>
-  concept datatype = (valtype<T> || arrtype<T>) && ! regtype<T> && ! regtype<typename T::type>;
+  concept memdatatype = (valtype<T> || arrtype<T>) && ! regtype<T> && ! regtype<typename T::type>;
 
   
   constexpr auto min(auto a, auto b)
@@ -1767,7 +1767,7 @@ namespace hcm {
 
   class exec_control {
     template<u64,arith> friend class val;
-    template<datatype,u64> friend class ram;
+    template<memdatatype,u64> friend class ram;
     friend class globals;
     template<u64 N, action T> friend void execute(val<N,u64>,T);
   private:
@@ -1788,7 +1788,7 @@ namespace hcm {
     friend class globals;
     friend class ::simulator;
     template<u64,arith> friend class reg;
-    template<datatype,u64> friend class ram;
+    template<memdatatype,u64> friend class ram;
   private:
     T data = 0;
     global() : data(0) {}
@@ -1812,7 +1812,7 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
-    template<datatype,u64> friend class ram;
+    template<memdatatype,u64> friend class ram;
     friend class proxy;
     friend class ::simulator;
   public:
@@ -1844,7 +1844,7 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<valtype, u64> friend class arr;
-    template<datatype,u64> friend class ram;
+    template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     friend class proxy;
     friend class ::simulator;
@@ -1877,13 +1877,9 @@ namespace hcm {
 
     void operator= (const val& x)
     {
-      if (exec.active) {
-	data = x.get();
-	timing = x.time();
-      }
-      // not completely accurate (FIXME?)
-      // in hardware, conditional execution impacts delays even when the condition is false
-      // (worst-case delay)
+      if (! exec.active) return;
+      data = x.get();
+      timing = x.time();
     }
 
     void operator&() = delete;
@@ -1985,11 +1981,13 @@ namespace hcm {
   private:
     proxy() = delete;
     ~proxy() = delete;
-
-    static auto get(const arith auto& x) {return x;}
+    static auto get(const auto& x) {return x;}
     static auto get(const valtype auto& x) {return x.get();}
-    static auto time(const arith auto& x) {return 0;}
+    static auto get(const arrtype auto& x) {return x.get();}
+    static auto time(const auto& x) {return 0;}
     static auto time(const valtype auto& x) {return x.time();}
+    static auto time(const arrtype auto& x) {return x.time();}
+
     static void set_time(valtype auto& x, arith auto t) {x.set_time(t);}
     static void update_metrics(const circuit &c) {panel.update_metrics(c);}
     
@@ -2003,7 +2001,7 @@ namespace hcm {
     
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
-    template<datatype,u64> friend class ram;
+    template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     
     template<valtype T1, valtype T2>
@@ -2175,7 +2173,9 @@ namespace hcm {
   class arr {
     template<valtype,u64> friend class arr;
     template<u64,arith> friend class val;
-    
+    template<memdatatype,u64> friend class ram;
+    friend class proxy;
+    static_assert(N!=0);
   private:
 
     T a[N];
@@ -2192,6 +2192,13 @@ namespace hcm {
 
     void operator&() = delete;
 
+    auto get() const
+    {
+      std::array<typename T::type,N> b;
+      for (int i=0; i<N; i++) b[i] = a[i].get();
+      return b;
+    }
+    
     u64 time() const
     {
       u64 t = 0;
@@ -2201,7 +2208,7 @@ namespace hcm {
       return t;
     }
     
-    void synchronize(u64 t)
+    void set_time(u64 t)
     {
       for (u64 i=0; i<N; i++) a[i].set_time(t);
     }
@@ -2214,12 +2221,20 @@ namespace hcm {
     arr() {}
     
     template<std::convertible_to<T> ...U>
-    arr(U... args) : a{args...} {}
+    arr(U... args) : a{args...} {std::cout << "hello\n";}
     
     arr(unaryfunc<u64,T> auto f)
     {
       for (u64 i=0; i<N; i++) {
 	a[i] = f(i);
+      }
+    }
+
+    template<std::convertible_to<T> U>
+    arr(const std::array<U,N> &b)
+    {
+      for (u64 i=0; i<N; i++) {
+	a[i] = b[i];
       }
     }
 
@@ -2337,30 +2352,41 @@ namespace hcm {
     }
   };
 
-  
+
   // ###########################
 
-  template<datatype T, u64 N>
-  class ram;
+  template<memdatatype T>
+  struct rawdata {};
 
+  template<memdatatype T> requires valtype<T>
+  struct rawdata<T> {
+    using type = T::type;
+    static constexpr u64 width = T::size;
+  };
 
-  template<datatype T, u64 N> requires valtype<T>
-  class ram<T,N> {
+  template<memdatatype T> requires arrtype<T>
+  struct rawdata<T> {
+    using type = std::array<typename T::type::type,T::size>;
+    static constexpr u64 width = T::size * T::type::size;
+  };  
+
+  
+  template<memdatatype T, u64 N>
+  class ram {
     // bandwidth = one read per clock cycle
   public:
     using type = T;
-    using valuetype = T::type;
-    static constexpr u64 datawidth = T::size;
-    using static_ram = sram<N,datawidth>;
+    using valuetype = rawdata<T>::type;
+    using static_ram = sram<N,rawdata<T>::width>;
 
   private:
     valuetype data[N];
     u64 next_read_time = 0;
 
     struct writeop {
-      u64 addr = 0;
-      valuetype dataval = 0;
-      u64 t = 0;
+      u64 addr{};
+      valuetype dataval{};
+      u64 t{};
       
       bool operator< (const writeop &rhs) {return t > rhs.t;}
 
@@ -2378,7 +2404,11 @@ namespace hcm {
     void operator& () = delete;
 
   public:
-    ram() {panel.update_storage(static_ram::NBITS);}
+    
+    ram()
+    {
+      panel.update_storage(static_ram::NBITS);
+    }
 
     ~ram()
     {
@@ -2413,7 +2443,8 @@ namespace hcm {
       u64 addr = proxy::get(address);
       assert(addr<N);
       t += std::llround(static_ram::LATENCY); // time at which the read completes
-      T readval = {data[addr],t};
+      T readval = data[addr];
+      readval.set_time(t);
       return readval;
     }
     
@@ -2421,7 +2452,7 @@ namespace hcm {
     {
       if (! exec.active) return;
       panel.update_energy(static_ram::NBITS*2*INV.e);
-      for (auto &v : data) v = 0; // instantaneous (FIXME?)
+      for (auto &v : data) v = {}; // instantaneous (FIXME?)
       writes.clear();
     }
 
@@ -2430,8 +2461,8 @@ namespace hcm {
       static_ram::print(s,os);
     }
   };
-  
 
+  
   // ###########################
   
   template<u64 N, u64 M, arith T = u64>
