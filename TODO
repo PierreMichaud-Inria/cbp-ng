@@ -7,7 +7,7 @@
  
 * missing operations: >, <, >=, <=, *, <<, >>, %, /
 
-* SRAM energy/delay/area model is for single R/W port; class ram currently does not model this constraint
+* currently, RAM writes are free wrt SRAM bandwidth (single R/W port)
 
 * spatial location for values + corresponding wire delay/energy
 
