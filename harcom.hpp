@@ -2221,7 +2221,7 @@ namespace hcm {
     arr() {}
     
     template<std::convertible_to<T> ...U>
-    arr(U... args) : a{args...} {std::cout << "hello\n";}
+    arr(U... args) : a{args...} {}
     
     arr(unaryfunc<u64,T> auto f)
     {
@@ -2425,8 +2425,17 @@ namespace hcm {
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
       u64 t = max(proxy::time(address),proxy::time(dataval)); // TODO: write latency?
-      writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
-      std::push_heap(writes.begin(),writes.end());
+      if (t <= next_read_time) {
+	// write immediately
+	u64 addr = proxy::get(address);
+	assert(addr<N);
+	data[addr] = proxy::get(dataval);
+	std::cout << "hello " << next_read_time << std::endl;
+      } else {
+	// write in the future
+	writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
+	std::push_heap(writes.begin(),writes.end());
+      }
     }
 
     T read(const ival auto& address)
