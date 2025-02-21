@@ -2430,7 +2430,6 @@ namespace hcm {
 	u64 addr = proxy::get(address);
 	assert(addr<N);
 	data[addr] = proxy::get(dataval);
-	std::cout << "hello " << next_read_time << std::endl;
       } else {
 	// write in the future
 	writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
