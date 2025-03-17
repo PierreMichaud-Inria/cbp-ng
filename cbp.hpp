@@ -1,18 +1,10 @@
 #include <cstdint>
 #include <iostream>
 #include <tuple>
+#include "synthetic_trace.hpp"
 #include "harcom.hpp"
 
 //using namespace hcm;
-
-
-const std::tuple<uint64_t,bool> trace[] = {
-  {0x1000,0},
-  {0x1004,1},
-  {0xFFFF0000,0},
-  {0xFFFF0004,1},
-  {0x1008,1}
-};
 
 
 struct predictor {
@@ -23,22 +15,21 @@ struct predictor {
 
 
 class simulator {
-  uint64_t n = 0;
   uint64_t nbranch = 0;
   uint64_t nmisp = 0;
   uint64_t max_pred_lat_ps = 0;
   uint64_t t = 0; // ps
-
-  template<uint64_t N>
-  auto next_branch(const std::tuple<uint64_t,bool> (&trace)[N])
+  synthetic_trace<> strace;
+  
+  auto next_branch()
   {
-    std::tuple<hcm::val<64>,hcm::val<1>> branch = trace[n];
-    std::get<0>(branch).set_time(t);
-    std::get<1>(branch).set_time(t); // FIXME?
-    n++;
+    auto [branch_pc,branch_dir,nextpc] = strace.next();
+    hcm::val<64> pc = branch_pc;
+    hcm::val<1> dir = branch_dir;
+    pc.set_time(t);
+    dir.set_time(t); // FIXME?
     t += hcm::panel.clock_cycle_ps;
-    if (n==N) n = 0;
-    return branch;
+    return std::tuple{pc,dir};
   }
 
 public:
@@ -55,7 +46,7 @@ public:
   {
     for (int i=0; i<trace_length; i++) {
       nbranch++;
-      auto [pc,dir] = next_branch(trace);
+      auto [pc,dir] = next_branch();
       hcm::val<1> pred = p.predict(pc);
       assert(pred.time() >= pc.time());
       uint64_t latency_ps = pred.time()-pc.time();
@@ -70,6 +61,7 @@ public:
 
   ~simulator()
   {
+    strace.print_stats("synthetic trace ");
     std::cout << "branches: " << nbranch << std::endl;
     std::cout << "mispredicted: " << nmisp << std::endl;
     std::cout << std::setprecision(3);

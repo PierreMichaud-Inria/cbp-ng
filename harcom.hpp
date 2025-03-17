@@ -93,12 +93,6 @@ namespace hcm {
     return (b>a)? b : a;
   }  
 
-  template<u64 N>
-  constexpr u64 arraysize(auto (&arr)[N])
-  {
-    return N;
-  }
-
   auto to_unsigned(std::integral auto x) {return std::make_unsigned_t<decltype(x)>(x);}
   auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
   auto to_unsigned(f64 x) {return std::bit_cast<u64>(x);}
@@ -522,7 +516,7 @@ namespace hcm {
     // The first segment is driven by a buffer, other segments by a large inverter
     // Load capacitance can be terminal (dload=0) or uniformly distributed (dload=1)
     // TODO: bidirectional wire is possible (with tristate inverters), but can it be pipelined?
-    static_assert(L<arraysize(METALRES));
+    static_assert(L<std::size(METALRES));
     assert(length>=0);
     if (length==0) dload = false;
     f64 co = (dload)? 0 : cload; // terminal load capacitance, relative to CGATE
@@ -1911,16 +1905,17 @@ namespace hcm {
 
     val(const valtype auto& x) : val(x.get(),x.time()) {}
     
-    void print(std::string s = "", std::ostream & os = std::cout) const
+    void print(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
     {
-      os << s << +get();
-      os << " (t=" << time() << ")";
-      os << std::endl << std::flush;
+      os << before << +get();
+      if (t)
+	os << " (t=" << time() << ")";
+      os << after << std::flush;
     }
 
-    void printb(std::string s = "", std::ostream & os = std::cout) const
+    void printb(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
     {
-      os << s;
+      os << before;
       if constexpr (std::integral<T>) {
 	os << std::bitset<N>(get());
       } else if constexpr (std::same_as<T,f32>) {
@@ -1928,8 +1923,9 @@ namespace hcm {
       } else if constexpr (std::same_as<T,f64>) {
 	os << std::bitset<N>(std::bit_cast<u64>(get()));
       }
-      os << " (t=" << time() << ")";
-      os << std::endl << std::flush;
+      if (t)
+	os << " (t=" << time() << ")";
+      os << after << std::flush;
     }
     
     val<1> operator[] (u64 i) requires std::unsigned_integral<T>
@@ -1940,7 +1936,7 @@ namespace hcm {
       return {(get() >> i) & 1, time()};
     }
     
-    val<N> reverse() const requires std::unsigned_integral<T>
+    [[nodiscard]] val<N> reverse() const requires std::unsigned_integral<T>
     {
       // no transistors
       return {reverse_bits(get()) >> (sizeof(T)*8-N), time()};
@@ -1953,7 +1949,7 @@ namespace hcm {
       return val<std::bit_width(N)> {n};
     }
 
-    val<N> priority_encode() const requires std::unsigned_integral<T>
+    [[nodiscard]] val<N> priority_encode() const requires std::unsigned_integral<T>
     {
       constexpr circuit c = priority_encoder<N>;
       u64 x = get();
@@ -2260,14 +2256,14 @@ namespace hcm {
     T* begin() {return a;}
     T* end() {return a+N;}
 
-    void print(std::string s = "", std::ostream & os = std::cout) const
+    void print(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
     {
-      for (u64 i=0; i<N; i++) a[i].print(s+std::to_string(i)+": ",os);
+      for (u64 i=0; i<N; i++) a[i].print(t,before+std::to_string(i)+": ",after,os);
     }
 
-    void printb(std::string s = "", std::ostream & os = std::cout) const
+    void printb(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
     {
-      for (u64 i=0; i<N; i++) a[i].printb(s+std::to_string(i)+": ",os);
+      for (u64 i=0; i<N; i++) a[i].printb(t,before+std::to_string(i)+": ",after,os);
     }
 
     auto concat() const requires std::unsigned_integral<typename T::type>
@@ -2282,7 +2278,7 @@ namespace hcm {
       return val<N*T::size> {y,time()};
     }
 
-    auto append(const std::convertible_to<valt<T>> auto& x) const
+    [[nodiscard]] auto append(const std::convertible_to<valt<T>> auto& x) const
     {
       // no transistors
       arr<valt<T>,N+1> b;

@@ -105,14 +105,12 @@ struct tage : predictor {
     bi = pc;
     static_loop<NUMG> ([&]<int I>() {
 	auto a = ph.template make_array<LOGG,HLEN[I]>();
-	a.append(pc);
-	gi[I] = a.xor_all();
+	gi[I] = a.append(pc).xor_all();
     });
     // compute tags
     static_loop<NUMG> ([&]<int I>() {
 	auto a = ph.template make_array<TAGW,HLEN[I]>();
-	a.append(val<TAGW>(pc).reverse());
-	gt[I] = a.xor_all();
+	gt[I] = a.append(val<TAGW>(pc).reverse()).xor_all();
     });
     // read tables
     readb = bim.read(bi);

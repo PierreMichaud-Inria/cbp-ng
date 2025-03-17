@@ -8,5 +8,5 @@ branch_predictor pred;
 
 int main()
 {
-  sim.run(pred,1000);
+  sim.run(pred,1000000);
 }
