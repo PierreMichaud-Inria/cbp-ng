@@ -40,7 +40,7 @@ struct path_history {
 
 
 template<u64 N>
-auto update_ctr(val<N> ctr, val<1> incr)
+[[nodiscard]] val<N> update_ctr(val<N> ctr, val<1> incr)
 {
   val<N> incsat = select(ctr==ctr.maxval,ctr,ctr+1);
   val<N> decsat = select(ctr==ctr.minval,ctr,ctr-1);
@@ -48,12 +48,17 @@ auto update_ctr(val<N> ctr, val<1> incr)
 }
 
 
+#define USE_META
+
 template<u64 NUMG, u64 LOGG, u64 LOGB, u64 TAGW, u64 GHIST>
 struct tage : predictor {
   static constexpr u64 CTR = 3;
   static constexpr u64 MINHIST = 3;
   static constexpr u64 NG = 1<<LOGG;
   static constexpr u64 NB = 1<<LOGB;
+  static constexpr u64 WEAK1 = 1<<(CTR-1);
+  static constexpr u64 WEAK0 = WEAK1-1;
+  static constexpr u64 METABITS = 4;
   
   ram<val<2>,NB> bim; // bimodal table
   ram<val<TAGW>,NG> gtag[NUMG]; // global tables tags
@@ -71,8 +76,14 @@ struct tage : predictor {
   reg<NUMG+1> match;
   reg<NUMG+1> match1; // longest match
   reg<NUMG+1> match2; // second longest match
-  reg<1> prediction;
-
+  reg<1> pred1; // primary prediction
+  reg<1> pred2; // alternate prediction
+  reg<1> prediction; // final prediction
+#ifdef USE_META
+  reg<METABITS> meta; // select between pred1 and pred2
+  reg<1> newly_alloc;
+#endif
+  
   static constexpr auto HLEN = [] () {
     // geometric history lengths
     // table 0 is the rightmost table and has the longest history    
@@ -99,7 +110,6 @@ struct tage : predictor {
   
   val<1> predict(val<64> pc)
   {
-    // TODO: use altpred when low conf prediction
     // compute indexes
     bi = pc;
     static_loop<NUMG> ([&]<int I>() {
@@ -125,11 +135,20 @@ struct tage : predictor {
     for (int i=0; i<NUMG; i++) {
       tagcmp[i] = (gt[i] == readt[i]);
     }
-    // find the longest match
+    // find longest match
     match = tagcmp.append(1).concat();
     match1 = match.priority_encode();
-    // final prediction
-    prediction = (match1 & preds) != 0;
+    pred1 = (match1 & preds) != 0;    
+    // find second longest match
+    match2 = (match^match1).priority_encode();
+    pred2 = (match2 & preds) != 0;
+#ifdef USE_META
+    arr<val<1>,NUMG> weakctr = [&](int i) {return readc[i]==WEAK0 | readc[i]==WEAK1;};
+    newly_alloc = (match1 & weakctr.concat() & ~readu.concat()) != 0;
+    prediction = select(newly_alloc & meta[METABITS-1],pred2,pred1);
+#else
+    prediction = pred1;
+#endif
     return prediction;
   }
 
@@ -147,12 +166,12 @@ struct tage : predictor {
       }
     };
     execute(match1,update_counter);
-    // determine the alternate prediction
-    match2 = (match^match1).priority_encode(); // 2nd longest match
     arr<val<1>,NUMG> gpreds = [&](int i) {return readc[i][CTR-1];};
     val<NUMG+1> preds = gpreds.append(readb[1]).concat();
-    val<1> altpred = (match2 & preds) != 0;
-    val<1> altdiff = (match2 != 0) & (altpred != prediction);
+    val<1> altdiff = (match2 != 0) & (pred2 != pred1);
+#ifdef USE_META
+    execute(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
+#endif
     // update u bit of providing entry
     val<NUMG> umask = match1 & altdiff.make_array<NUMG>().concat();
     execute(umask,[&](int i){ubit[i].write(gi[i],goodpred);});
@@ -169,7 +188,7 @@ struct tage : predictor {
     auto allocate = [&] (int i) {
       gtag[i].write(gi[i],gt[i]);
       ubit[i].write(gi[i],0);
-      val<CTR> initctr = dir.make_array<CTR>().concat() ^ ((1<<(CTR-1))-1);
+      val<CTR> initctr = dir.make_array<CTR>().concat() ^ WEAK0;
       gctr[i].write(gi[i],initctr);
     };
     execute(allocmask,allocate);

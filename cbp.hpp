@@ -19,7 +19,8 @@ class simulator {
   uint64_t nmisp = 0;
   uint64_t max_pred_lat_ps = 0;
   uint64_t t = 0; // ps
-  synthetic_trace<> strace{14,0.001};
+  //synthetic_trace<> strace{14,0.001};
+  synthetic_trace<1000,128,1024,5> strace{99,0.0};
   
   auto next_branch()
   {
