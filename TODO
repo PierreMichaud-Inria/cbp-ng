@@ -4,6 +4,7 @@
  - carry-save adder
  - integer multiplier
  - (floating-point operators)
+ - popcount
  
 * missing operations: >, <, >=, <=, *, <<, >>, %, /
 

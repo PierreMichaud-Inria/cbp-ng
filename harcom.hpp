@@ -41,6 +41,7 @@
 #include <tuple>
 #include <array>
 #include <vector>
+#include <limits>
 
 
 class simulator; // has access to private members of class "val"
@@ -133,7 +134,7 @@ namespace hcm {
 
   static constexpr auto reversed_byte = [] () {
     std::array<u8,256> b;
-    for (u8 i=0; i!=255; i++) {
+    for (u64 i=0; i<256; i++) {
       b[i] = bit_reversal(i);
     }
     return b;
@@ -1883,6 +1884,34 @@ namespace hcm {
     static constexpr u64 size = N;
     using type = T;
 
+    static constexpr T maxval = []() {
+      if constexpr (N == sizeof(T)*8) {
+	return std::numeric_limits<T>::max();
+      } else {
+	static_assert(N < sizeof(T)*8);
+	if constexpr (std::unsigned_integral<T>) {
+	  return (T(1)<<N)-1;
+	} else {
+	  static_assert(std::signed_integral<T>);
+	  return (T(1)<<(N-1))-1;
+	}
+      } 
+    }();
+
+    static constexpr T minval = []() {
+      if constexpr (N == sizeof(T)*8) {
+	return std::numeric_limits<T>::min();
+      } else {
+	static_assert(N < sizeof(T)*8);
+	if constexpr (std::unsigned_integral<T>) {
+	  return 0;
+	} else {
+	  static_assert(std::signed_integral<T>);
+	  return -(T(1)<<(N-1));
+	}
+      } 
+    }();    
+
     val(std::integral auto x, u64 t=0) requires std::integral<T> : data(fit(x))
     {
       set_time(t);
@@ -1912,7 +1941,7 @@ namespace hcm {
 	os << " (t=" << time() << ")";
       os << after << std::flush;
     }
-
+    
     void printb(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
     {
       os << before;
@@ -1927,7 +1956,7 @@ namespace hcm {
 	os << " (t=" << time() << ")";
       os << after << std::flush;
     }
-    
+
     val<1> operator[] (u64 i) requires std::unsigned_integral<T>
     {
       // no transistors
@@ -1936,7 +1965,7 @@ namespace hcm {
       return {(get() >> i) & 1, time()};
     }
     
-    [[nodiscard]] val<N> reverse() const requires std::unsigned_integral<T>
+    [[nodiscard]] val reverse() const requires std::unsigned_integral<T>
     {
       // no transistors
       return {reverse_bits(get()) >> (sizeof(T)*8-N), time()};
@@ -1949,7 +1978,7 @@ namespace hcm {
       return val<std::bit_width(N)> {n};
     }
 
-    [[nodiscard]] val<N> priority_encode() const requires std::unsigned_integral<T>
+    [[nodiscard]] val priority_encode() const requires std::unsigned_integral<T>
     {
       constexpr circuit c = priority_encoder<N>;
       u64 x = get();
@@ -2171,10 +2200,9 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
-    static_assert(N!=0);
   private:
 
-    T a[N];
+    std::array<T,N> a {};
 
     void copy_from(const arr &other)
     {
@@ -2252,9 +2280,6 @@ namespace hcm {
       assert(i<N);
       return a[i];
     }
-
-    T* begin() {return a;}
-    T* end() {return a+N;}
 
     void print(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
     {

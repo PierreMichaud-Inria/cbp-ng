@@ -19,7 +19,7 @@ class simulator {
   uint64_t nmisp = 0;
   uint64_t max_pred_lat_ps = 0;
   uint64_t t = 0; // ps
-  synthetic_trace<> strace;
+  synthetic_trace<> strace{14,0.001};
   
   auto next_branch()
   {
@@ -64,6 +64,8 @@ public:
     strace.print_stats("synthetic trace ");
     std::cout << "branches: " << nbranch << std::endl;
     std::cout << "mispredicted: " << nmisp << std::endl;
+    if (nbranch!=0)
+      std::cout << "mispredict ratio: " << f64(nmisp)/nbranch << std::endl;
     std::cout << std::setprecision(3);
     hcm::panel.storage.print("storage (bits): ");
     std::cout << "max prediction latency (cycle): " << double(max_pred_lat_ps) / hcm::panel.clock_cycle_ps << std::endl;

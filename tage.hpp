@@ -42,9 +42,8 @@ struct path_history {
 template<u64 N>
 auto update_ctr(val<N> ctr, val<1> incr)
 {
-  val<N> ctrmax = -1;
-  val<N> incsat = select(ctr==ctrmax,ctr,ctr+1);
-  val<N> decsat = select(ctr==0,ctr,ctr-1);
+  val<N> incsat = select(ctr==ctr.maxval,ctr,ctr+1);
+  val<N> decsat = select(ctr==ctr.minval,ctr,ctr-1);
   return select(incr,incsat,decsat);
 }
 
@@ -153,11 +152,12 @@ struct tage : predictor {
     arr<val<1>,NUMG> gpreds = [&](int i) {return readc[i][CTR-1];};
     val<NUMG+1> preds = gpreds.append(readb[1]).concat();
     val<1> altpred = (match2 & preds) != 0;
-    val<1> altdiff = (altpred != prediction);
+    val<1> altdiff = (match2 != 0) & (altpred != prediction);
     // update u bit of providing entry
     val<NUMG> umask = match1 & altdiff.make_array<NUMG>().concat();
     execute(umask,[&](int i){ubit[i].write(gi[i],goodpred);});
-    val<NUMG> postmask = match1-1; // histories longer than providing entry ("post" entries)
+    val<NUMG> mispmask = mispred.make_array<NUMG>().concat();
+    val<NUMG> postmask = mispmask & (match1-1); // histories longer than providing entry ("post" entries)
     val<NUMG> candallocmask = postmask & ~readu.concat(); // candidate post entries for allocation
     // if multiple candidate entries, we select a single one
     val<NUMG> collamask = candallocmask.reverse();
@@ -178,7 +178,7 @@ struct tage : predictor {
     val<NUMG> uclearmask = postmask & noalloc.make_array<NUMG>().concat();
     execute(uclearmask,[&](int i){ubit[i].write(gi[i],0);});
     // update path history
-    ph.update(concat(val<5>(pc),dir));
+    ph.update(concat(val<5>{pc},dir));
   }
   
 };
