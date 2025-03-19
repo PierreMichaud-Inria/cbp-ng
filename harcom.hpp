@@ -1169,14 +1169,15 @@ namespace hcm {
 
     static constexpr circuit flops = oneflop * N;
 
-    static constexpr circuit clock1 = inv{}.make(inv_tri{}.icap<1>()*4); // master latch clock (local)
+    // master-latch clock generated locally at each flop
+    static constexpr circuit clock1 = inv{}.make(inv_tri{}.icap<1>()*4);
 
     static constexpr f64 width = SRAM_CELL.wordline_length * N; // um
     static constexpr f64 height = SRAM_CELL.bitline_length * (oneflop.t+clock1.t) / SRAM_CELL.transistors; // um
     
     static constexpr circuit clocking = []() {
       f64 phicap2 = inv_tri{}.icap<2>() * 4;
-      circuit clock2 = wire<4.>(width,false,(phicap2+clock1.ci)*N);
+      circuit clock2 = wire<4.>(width,false,(phicap2+clock1.ci)*N); // slave-latch clock
       return clock2 + clock1 * N;
     } ();
 
@@ -2209,23 +2210,32 @@ namespace hcm {
     template<u64 M, arith U>
     reg(const val<M,U> &x) : val<N,T>(x) {create();}
 
+    reg(const reg &other)
+    {
+      val<N,T>::operator=(other);
+      create();
+    }
+    
     ~reg()
     {
       storage_destroyed = true;
     }
 
-    void operator= (const auto &other)
+    void assign(const auto &other)
     {
       val<N,T>::operator=(other);
       panel.update_energy(stg::write_energy_fJ);
     }
-
-    reg(const reg &other)
+    
+    void operator= (const reg& other)
     {
-      *this = other;
-      create();
+      assign(other);
     }
-
+    
+    void operator= (const auto &other)
+    {
+      assign(other);
+    }
   };
 
 
@@ -2568,7 +2578,7 @@ namespace hcm {
     }    
   };
 
-    
+
   // ###########################
 
   // EQUALITY
