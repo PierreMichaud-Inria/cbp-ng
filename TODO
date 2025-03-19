@@ -1,5 +1,4 @@
 * missing hardware models
- - flip-flop (for class reg)
  - ROM
  - carry-save adder
  - integer multiplier

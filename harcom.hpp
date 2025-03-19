@@ -1045,7 +1045,7 @@ namespace hcm {
     if constexpr (N<=1) {
       return circuit{};
     } else {
-      // Ladner-Discher tree
+      // Ladner-Fischer tree
       constexpr u64 K = (std::has_single_bit(N))? N/2 : std::bit_floor(N);
       constexpr circuit right = parallel_prefix<K,OP,D> + buffer(OP.ci*(N-K),false) * D;
       constexpr circuit left = parallel_prefix<N-K,OP,D>;
@@ -1148,7 +1148,48 @@ namespace hcm {
     return (tree | bws) + (sum || carryout);
   }
   
+  // ###########################
 
+
+  template<u64 N>
+  struct flipflops {
+    static constexpr circuit oneflop = []() {
+      // edge-triggered flip-flop (2 latches)
+      // clocking modeled separately
+      inv i;
+      inv_tri t;
+      f64 co = INVCAP; // we do not care about the delay anyway
+      f64 cfeedback1 = i.icap() + t.cp;
+      f64 cfeedback2 = 2*i.icap() + t.cp;
+      circuit tri1 = t.make(cfeedback1);
+      circuit tri2 = t.make(cfeedback2);
+      circuit forward = tri1 + i.make(2*t.icap()) + tri2 + i.make(co);
+      circuit backward = tri1 || (i.make(t.icap()) + tri2);;
+      return forward || backward;
+    } ();
+
+    static constexpr f64 height = SRAM_CELL.bitline_length * oneflop.t / SRAM_CELL.transistors; // um
+    static constexpr f64 width = SRAM_CELL.wordline_length * N; // um
+
+    static constexpr circuit flops = oneflop * N;
+    
+    static constexpr circuit clocking = []() {
+      inv_tri t;
+      f64 phicap1 = t.icap<1>() * 4;
+      f64 phicap2 = t.icap<2>() * 4;
+      circuit clock1 = buffer<4.>(phicap1,true); // complementary clock, local to each flop
+      circuit clock2 = wire<4.>(width,false,(phicap2+clock1.ci)*N);
+      return clock2 + clock1 * N;
+    } ();
+
+    static constexpr u64 xtors = flops.t + clocking.t;
+    
+    // clocking.e corresponds to a transition probability of 0.5
+    // actually, the clock transitions with probability 1 twice per write
+    static constexpr f64 write_energy_fJ = flops.e + clocking.e * 4;
+  };
+
+  
   // ###########################
 
   template<typename T>
@@ -2151,7 +2192,9 @@ namespace hcm {
   
   template<u64 N, arith T = u64>
   class reg : public val<N,T> {
-    // TODO: transistors, energy
+  public:
+    using stg = flipflops<N>;
+    
   private:
     void create()
     {
@@ -2176,7 +2219,7 @@ namespace hcm {
     void operator= (const auto &other)
     {
       val<N,T>::operator=(other);
-      // TODO: write energy
+      panel.update_energy(stg::write_energy_fJ);
     }
 
     reg(const reg &other)
