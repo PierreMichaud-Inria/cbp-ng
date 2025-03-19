@@ -1154,8 +1154,7 @@ namespace hcm {
   template<u64 N>
   struct flipflops {
     static constexpr circuit oneflop = []() {
-      // edge-triggered flip-flop (2 latches)
-      // clocking modeled separately
+      // master-slave flip-flop (2 latches)
       inv i;
       inv_tri t;
       f64 co = INVCAP; // we do not care about the delay anyway
@@ -1168,22 +1167,21 @@ namespace hcm {
       return forward || backward;
     } ();
 
-    static constexpr f64 height = SRAM_CELL.bitline_length * oneflop.t / SRAM_CELL.transistors; // um
-    static constexpr f64 width = SRAM_CELL.wordline_length * N; // um
-
     static constexpr circuit flops = oneflop * N;
+
+    static constexpr circuit clock1 = inv{}.make(inv_tri{}.icap<1>()*4); // master latch clock (local)
+
+    static constexpr f64 width = SRAM_CELL.wordline_length * N; // um
+    static constexpr f64 height = SRAM_CELL.bitline_length * (oneflop.t+clock1.t) / SRAM_CELL.transistors; // um
     
     static constexpr circuit clocking = []() {
-      inv_tri t;
-      f64 phicap1 = t.icap<1>() * 4;
-      f64 phicap2 = t.icap<2>() * 4;
-      circuit clock1 = buffer<4.>(phicap1,true); // complementary clock, local to each flop
+      f64 phicap2 = inv_tri{}.icap<2>() * 4;
       circuit clock2 = wire<4.>(width,false,(phicap2+clock1.ci)*N);
       return clock2 + clock1 * N;
     } ();
 
     static constexpr u64 xtors = flops.t + clocking.t;
-    
+
     // clocking.e corresponds to a transition probability of 0.5
     // actually, the clock transitions with probability 1 twice per write
     static constexpr f64 write_energy_fJ = flops.e + clocking.e * 4;
