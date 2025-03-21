@@ -1751,10 +1751,10 @@ namespace hcm {
   using base = base_impl<T>::type;
 
   template<typename T>
-  concept ival = std::integral<T> || std::integral<base<T>>;
+  concept ival = std::integral<std::remove_reference_t<T>> || std::integral<base<T>>;
 
   template<typename T>
-  concept fval = std::floating_point<T> || std::floating_point<base<T>>;
+  concept fval = std::floating_point<std::remove_reference<T>> || std::floating_point<base<T>>;
 
   template<typename T>
   inline constexpr u64 length = 0;
@@ -3031,7 +3031,7 @@ namespace hcm {
   // this primitive is too useful not to be provided,
   // however its own delay and energy cost is not modeled, and I do not see an easy way to model it
   template<valtype T, action A>
-  void execute(T && mask, const A& f)
+  void execute(T &&mask, const A &f)
   {
     auto prev_exec = exec;
     u64 m = proxy::get(mask);
@@ -3039,7 +3039,6 @@ namespace hcm {
     for (u64 i=0; i<valt<T>::size; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
-      //if (!cond) continue;
       // to prevent cheating, we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<A>) {
