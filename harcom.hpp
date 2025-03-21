@@ -98,10 +98,13 @@ namespace hcm {
   auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
   auto to_unsigned(f64 x) {return std::bit_cast<u64>(x);}
 
+  template<arith T>
+  inline constexpr u64 bitwidth = (std::same_as<T,bool>)? 1 : sizeof(T)*8;
+  
   template<u64 N, std::integral T>
   auto truncate(T x)
   {
-    if constexpr (N >= sizeof(T)*8) {
+    if constexpr (N >= bitwidth<T>) {
       return x;
     } else {
       return x & ((std::make_unsigned_t<T>(1)<<N)-1);
@@ -143,12 +146,16 @@ namespace hcm {
   auto constexpr reverse_bits(std::unsigned_integral auto x)
   {
     using T = decltype(x);
-    T y = reversed_byte[x & 0xFF];
-    for (int i=1; i<sizeof(T); i++) {
-      x >>= 8;
-      y = (y<<8) | reversed_byte[x & 0xFF];
+    if constexpr (std::same_as<T,bool>) {
+      return x;
+    } else {
+      T y = reversed_byte[x & 0xFF];
+      for (int i=1; i<sizeof(T); i++) {
+	x >>= 8;
+	y = (y<<8) | reversed_byte[x & 0xFF];
+      }
+      return y;
     }
-    return y;
   }
 
 
@@ -1726,7 +1733,7 @@ namespace hcm {
 
   template<arith T>
   struct toval_impl<T> {
-    using type = val<sizeof(T)*8,T>;
+    using type = val<bitwidth<T>,T>;
   };
 
   template<valtype T>
@@ -1805,7 +1812,7 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class globals;
-    template<valtype T, action A> friend void execute(T&&,const A&);
+    template<ival T, action A> friend void execute(T&&,const A&);
   private:
     bool active = true;
     u64 time = 0;
@@ -1874,8 +1881,8 @@ namespace hcm {
   template<u64 N, arith T = u64>
   class val {
     //static_assert(N!=0);
-    static_assert(N <= sizeof(T)*8);
-    static_assert(N==sizeof(T)*8 || std::integral<T>);
+    static_assert(N <= bitwidth<T>);
+    static_assert(N==bitwidth<T> || std::integral<T>);
 
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
@@ -1903,7 +1910,7 @@ namespace hcm {
 
     T get() requires std::signed_integral<T>
     {
-      if constexpr (N < sizeof(T)*8) {
+      if constexpr (N < bitwidth<T>) {
 	assert((std::make_unsigned_t<T>(data) >> N) == 0);
       }
       T signbit = T(1) << (N-1);
@@ -1931,10 +1938,10 @@ namespace hcm {
     using type = T;
 
     static constexpr T maxval = []() {
-      if constexpr (N == sizeof(T)*8) {
+      if constexpr (N == bitwidth<T>) {
 	return std::numeric_limits<T>::max();
       } else {
-	static_assert(N < sizeof(T)*8);
+	static_assert(N < bitwidth<T>);
 	if constexpr (std::unsigned_integral<T>) {
 	  return (T(1)<<N)-1;
 	} else {
@@ -1945,10 +1952,10 @@ namespace hcm {
     }();
 
     static constexpr T minval = []() {
-      if constexpr (N == sizeof(T)*8) {
+      if constexpr (N == bitwidth<T>) {
 	return std::numeric_limits<T>::min();
       } else {
-	static_assert(N < sizeof(T)*8);
+	static_assert(N < bitwidth<T>);
 	if constexpr (std::unsigned_integral<T>) {
 	  return 0;
 	} else {
@@ -1970,7 +1977,7 @@ namespace hcm {
     
     val(std::floating_point auto x, u64 t=0) : data(x)
     {
-      static_assert(N == sizeof(T)*8);
+      static_assert(N == bitwidth<T>);
       set_time(t);
     }
 
@@ -2013,7 +2020,7 @@ namespace hcm {
     [[nodiscard]] val reverse() requires std::unsigned_integral<T>
     {
       // no transistors
-      return {reverse_bits(get()) >> (sizeof(T)*8-N), time()};
+      return {reverse_bits(get()) >> (bitwidth<T>-N), time()};
     }
 
     auto ones()
@@ -2190,7 +2197,7 @@ namespace hcm {
     template<valtype T, typename T1, typename T2>
     friend valt<T1,T2> select(T&&, T1&&, T2&&);
 
-    template<valtype T, action A>
+    template<ival T, action A>
     friend void execute(T&&,const A&);
   };
   
@@ -3030,7 +3037,7 @@ namespace hcm {
   // CONDITIONAL EXECUTION
   // this primitive is too useful not to be provided,
   // however its own delay and energy cost is not modeled, and I do not see an easy way to model it
-  template<valtype T, action A>
+  template<ival T, action A>
   void execute(T &&mask, const A &f)
   {
     auto prev_exec = exec;
