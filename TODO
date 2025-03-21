@@ -9,7 +9,7 @@
 
 * currently, RAM writes are free wrt SRAM bandwidth (single R/W port)
 
-* spatial location for values + corresponding wire delay/energy
+* hardware complexity of data transfers
 
 * general reduction primitive for class arr
 

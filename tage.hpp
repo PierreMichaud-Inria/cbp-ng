@@ -136,7 +136,7 @@ struct tage : predictor {
       tagcmp[i] = (gt[i] == readt[i]);
     }
     // find longest match
-    match = tagcmp.append(1).concat();
+    match = tagcmp.append(1).concat(); // bimodal is default when no match
     match1 = match.priority_encode();
     pred1 = (match1 & preds) != 0;    
     // find second longest match

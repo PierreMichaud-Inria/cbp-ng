@@ -108,7 +108,7 @@ namespace hcm {
     }
   }
 
-  template<u64 N, std::integral T>
+  template<u64 N, arith T>
   auto ones(T x)
   {
     return std::popcount(truncate<N>(to_unsigned(x)));
@@ -1722,32 +1722,8 @@ namespace hcm {
   // ###########################
 
   template<typename T>
-  struct base_impl {};
-
-  template<arith T>
-  struct base_impl<T> {using type = T;};
-  
-  template<valtype T>
-  struct base_impl<T> {using type = T::type;};
-
-  template<typename T>
-  using base = base_impl<T>::type;
-
-  template<typename T>
-  concept ival = std::integral<T> || std::integral<base<T>>; 
-
-  template<typename T>
-  concept fval = std::floating_point<T> || std::floating_point<base<T>>; 
-  
-  template<typename T>
-  inline constexpr u64 length = 0;
-
-  template<valtype T>
-  inline constexpr u64 length<T> = T::size;
-
-  template<typename T>
   struct toval_impl {};
-  
+
   template<arith T>
   struct toval_impl<T> {
     using type = val<sizeof(T)*8,T>;
@@ -1755,12 +1731,37 @@ namespace hcm {
 
   template<valtype T>
   struct toval_impl<T> {
-    using type = val<T::size,typename T::type>;
+    using U = std::remove_reference_t<T>;
+    using type = val<U::size,typename U::type>;
   };
   
   template<typename T>
   using toval = toval_impl<T>::type;
+
+  template<typename T>
+  struct base_impl {};
+
+  template<arith T>
+  struct base_impl<T> {using type = T;};
   
+  template<valtype T>
+  struct base_impl<T> {using type = toval<T>::type;};
+
+  template<typename T>
+  using base = base_impl<T>::type;
+
+  template<typename T>
+  concept ival = std::integral<T> || std::integral<base<T>>;
+
+  template<typename T>
+  concept fval = std::floating_point<T> || std::floating_point<base<T>>;
+
+  template<typename T>
+  inline constexpr u64 length = 0;
+
+  template<valtype T>
+  inline constexpr u64 length<T> = toval<T>::size;
+
   template<typename T1, typename ...T>
   struct valt_impl {};
 
@@ -1768,7 +1769,7 @@ namespace hcm {
   struct valt_impl<T> {
     using type = toval<T>;
   };
-  
+
   template<ival T1, ival T2>
   struct valt_impl<T1,T2> {
     using type = std::conditional_t<(length<T2> > length<T1>),toval<T2>,toval<T1>>;
@@ -1793,18 +1794,18 @@ namespace hcm {
   struct valt_impl<T1,T2,T...> {
     using type = typename valt_impl<T1,typename valt_impl<T2,T...>::type>::type;
   };
-  
+
   template<typename ...T>
   using valt = valt_impl<T...>::type;
 
-  
+
   // ###########################
 
   class exec_control {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class globals;
-    template<u64 N, action T> friend void execute(val<N,u64>,T);
+    template<valtype T, action A> friend void execute(T&&,const A&);
   private:
     bool active = true;
     u64 time = 0;
@@ -1895,9 +1896,12 @@ namespace hcm {
       return truncate<N>(x);
     }
     
-    T get() const {return data;}
+    T get()
+    {
+      return data;
+    }
 
-    T get() const requires std::signed_integral<T>
+    T get() requires std::signed_integral<T>
     {
       if constexpr (N < sizeof(T)*8) {
 	assert((std::make_unsigned_t<T>(data) >> N) == 0);
@@ -1909,14 +1913,16 @@ namespace hcm {
     u64 time() const {return max(exec.time,timing);}
 
     void set_time(u64 t) {timing = t;}
-
-    void operator= (const val& x)
+    
+    void operator= (val & x)
     {
       if (! exec.active) return;
       data = x.get();
       timing = x.time();
     }
 
+    void operator= (val && x) {operator=(x);}
+    
     void operator&() = delete;
     
   public:
@@ -1968,29 +1974,28 @@ namespace hcm {
       set_time(t);
     }
 
-    val(const val& x) : val(x.get(),x.time()) {}
+    val(val &x) : val(x.get(),x.time()) {}
+    val(val &&x) : val(x) {}
+    val(valtype auto &&x) requires std::unsigned_integral<T> : val(to_unsigned(x.get()),x.time()) {}
+    val(valtype auto &&x) : val(x.get(),x.time()) {}
     
-    val(const valtype auto& x) requires std::unsigned_integral<T> : val(to_unsigned(x.get()),x.time()) {}
-
-    val(const valtype auto& x) : val(x.get(),x.time()) {}
-    
-    void print(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
+    void print(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
-      os << before << +get();
+      os << before << +data;
       if (t)
 	os << " (t=" << time() << ")";
       os << after << std::flush;
     }
     
-    void printb(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
+    void printb(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
       os << before;
       if constexpr (std::integral<T>) {
-	os << std::bitset<N>(get());
+	os << std::bitset<N>(data);
       } else if constexpr (std::same_as<T,f32>) {
-	os << std::bitset<N>(std::bit_cast<u32>(get()));
+	os << std::bitset<N>(std::bit_cast<u32>(data));
       } else if constexpr (std::same_as<T,f64>) {
-	os << std::bitset<N>(std::bit_cast<u64>(get()));
+	os << std::bitset<N>(std::bit_cast<u64>(data));
       }
       if (t)
 	os << " (t=" << time() << ")";
@@ -2005,20 +2010,20 @@ namespace hcm {
       return {(get() >> i) & 1, time()};
     }
     
-    [[nodiscard]] val reverse() const requires std::unsigned_integral<T>
+    [[nodiscard]] val reverse() requires std::unsigned_integral<T>
     {
       // no transistors
       return {reverse_bits(get()) >> (sizeof(T)*8-N), time()};
     }
 
-    auto ones() const
+    auto ones()
     {
       // TODO: transistors & time
       auto n = std::popcount(truncate<N>(get()));
       return val<std::bit_width(N)> {n};
     }
 
-    [[nodiscard]] val priority_encode() const requires std::unsigned_integral<T>
+    [[nodiscard]] val priority_encode() requires std::unsigned_integral<T>
     {
       constexpr circuit c = priority_encoder<N>;
       u64 x = get();
@@ -2028,7 +2033,7 @@ namespace hcm {
     }
 
     template<u64 M>
-    auto make_array() const
+    auto make_array()
     {
       // broadcast (TODO: wires)
       arr<valt<val>,M> a;
@@ -2046,22 +2051,27 @@ namespace hcm {
   private:
     proxy() = delete;
     ~proxy() = delete;
-    static auto get(const auto& x) {return x;}
-    static auto get(const valtype auto& x) {return x.get();}
-    static auto get(const arrtype auto& x) {return x.get();}
-    static auto time(const auto& x) {return 0;}
-    static auto time(const valtype auto& x) {return x.time();}
-    static auto time(const arrtype auto& x) {return x.time();}
+    static auto get(const arith auto& x) {return x;}
+    static auto get(valtype auto& x) {return x.get();}
+    static auto get(arrtype auto& x) {return x.get();}
+    static u64 time(const auto& x) {return 0;}
+    static u64 time(const valtype auto& x) {return x.time();}
+    static u64 time(const arrtype auto& x) {return x.time();}
 
     static void set_time(valtype auto& x, arith auto t) {x.set_time(t);}
     static void update_metrics(const circuit &c) {panel.update_metrics(c);}
     
     template<valtype T1, valtype T2>
-    static auto concatenate(const T1& x1, const T2& x2)
+    static auto concatenate(T1&& x1, T2&& x2)
     {
-      static_assert(std::unsigned_integral<typename T1::type>);
-      static_assert(std::unsigned_integral<typename T2::type>);
-      return val<x1.size+x2.size> {(proxy::get(x1) << x2.size) | proxy::get(x2)};
+      static_assert(std::unsigned_integral<base<T1>>);
+      static_assert(std::unsigned_integral<base<T2>>);
+      using rtype = val<x1.size+x2.size>;
+      if constexpr (x1.size == 0) {
+	return rtype {get(x2)};
+      } else {
+	return rtype {(get(x1) << x2.size) | get(x2)};
+      }
     }
     
     template<u64,arith> friend class reg;
@@ -2070,118 +2080,118 @@ namespace hcm {
     template<u64,u64,arith> friend class rom;
     
     template<valtype T1, valtype T2>
-    friend val<1> operator== (const T1&, const T2&);
+    friend val<1> operator== (T1&&, T2&&);
 
     template<valtype T1, arith T2>
-    friend val<1> operator== (const T1&, const T2&);
+    friend val<1> operator== (T1&&, T2);
     
     template<valtype T1, valtype T2>
-    friend val<1> operator!= (const T1&, const T2&);
+    friend val<1> operator!= (T1&&, T2&&);
 
     template<valtype T1, arith T2>
-    friend val<1> operator!= (const T1&, const T2&);
+    friend val<1> operator!= (T1&&, T2);
     
     template<valtype T1, valtype T2>
-    friend val<1> operator> (const T1&, const T2&);
+    friend val<1> operator> (T1&&, T2&&);
 
     template<valtype T1, arith T2>
-    friend val<1> operator> (const T1&, const T2&);
+    friend val<1> operator> (T1&&, T2);
 
     template<valtype T1, valtype T2>
-    friend val<1> operator< (const T1&, const T2&);
+    friend val<1> operator< (T1&&, T2&&);
     
     template<valtype T1, arith T2>
-    friend val<1> operator< (const T1&, const T2&);
-    
-    template<valtype T1, valtype T2>
-    friend val<1> operator>= (const T1&, const T2&);
-
-    template<valtype T1, arith T2>
-    friend val<1> operator>= (const T1&, const T2&);
+    friend val<1> operator< (T1&&, T2);
     
     template<valtype T1, valtype T2>
-    friend val<1> operator<= (const T1&, const T2&);
+    friend val<1> operator>= (T1&&, T2&&);
 
     template<valtype T1, arith T2>
-    friend val<1> operator<= (const T1&, const T2&);
+    friend val<1> operator>= (T1&&, T2);
+    
+    template<valtype T1, valtype T2>
+    friend val<1> operator<= (T1&&, T2&&);
+
+    template<valtype T1, arith T2>
+    friend val<1> operator<= (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1,T2> operator+ (const T1&, const T2&);
+    friend valt<T1,T2> operator+ (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1,T2> operator+ (const T1&, const T2&);
+    friend valt<T1,T2> operator+ (T1&&, T2);
 
     template<valtype T>
-    friend valt<T> operator- (const T&);
+    friend valt<T> operator- (T&&);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1,T2> operator- (const T1&, const T2&);
+    friend valt<T1,T2> operator- (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1,T2> operator- (const T1&, const T2&);
+    friend valt<T1,T2> operator- (T1&&, T2);
     
     template<std::integral T1, valtype T2> requires (ival<T2>)
-    friend valt<T1,T2> operator- (const T1&, const T2&);
+    friend valt<T1,T2> operator- (T1, T2&&);
 
     template<valtype T1, valtype T2>  requires (ival<T1> && ival<T2>)
-    friend valt<T1> operator<< (const T1&, const T2&);
+    friend valt<T1> operator<< (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1> operator<< (const T1&, const T2&);
+    friend valt<T1> operator<< (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1> operator>> (const T1&, const T2&);
+    friend valt<T1> operator>> (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1> operator>> (const T1&, const T2&);
+    friend valt<T1> operator>> (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1,T2> operator* (const T1&, const T2&);
+    friend valt<T1,T2> operator* (T1&&, T2&&);
 
-    template<valtype T1, ival T2> requires (ival<T1>)
-    friend valt<T1,T2> operator* (const T1&, const T2&);
+    template<valtype T1, std::integral T2> requires (ival<T1>)
+    friend valt<T1,T2> operator* (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1> operator/ (const T1&, const T2&);
+    friend valt<T1> operator/ (T1&&, T2&&);
 
-    template<valtype T1, ival T2> requires (ival<T1>)
-    friend valt<T1> operator/ (const T1&, const T2&);
+    template<valtype T1, std::integral T2> requires (ival<T1>)
+    friend valt<T1> operator/ (T1&&, T2);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T2> operator% (const T1&, const T2&);
+    friend valt<T2> operator% (T1&&, T2&&);
 
-    template<valtype T1, ival T2> requires (ival<T1>)
-    friend valt<T2> operator% (const T1&, const T2&);
+    template<valtype T1, std::integral T2> requires (ival<T1>)
+    friend valt<T2> operator% (T1&&, T2);
     
     template<valtype T1, valtype T2>
-    friend valt<T1,T2> operator& (const T1&, const T2&);
+    friend valt<T1,T2> operator& (T1&&, T2&&);
 
     template<valtype T1, std::integral T2>
-    friend valt<T1> operator& (const T1&, const T2&);
+    friend valt<T1> operator& (T1&&, T2);
 
     template<valtype T1, valtype T2>
-    friend valt<T1,T2> operator| (const T1&, const T2&);
+    friend valt<T1,T2> operator| (T1&&, T2&&);
 
     template<valtype T1, std::integral T2>
-    friend valt<T1> operator| (const T1&, const T2&);
+    friend valt<T1> operator| (T1&&, T2);
     
     template<valtype T1, valtype T2>
-    friend valt<T1,T2> operator^ (const T1&, const T2&);
+    friend valt<T1,T2> operator^ (T1&&, T2&&);
 
     template<valtype T1, std::integral T2>
-    friend valt<T1> operator^ (const T1&, const T2&);
+    friend valt<T1> operator^ (T1&&, T2);
     
     template<valtype T>
-    friend valt<T> operator~ (const T&);
+    friend valt<T> operator~ (T&&);
 
     template<valtype T1, valtype T2, valtype... T>
-    friend auto concat(const T1&, const T2&, const T&...);
+    friend auto concat(T1&&, T2&&, T&&...);
 
-    template<valtype T>
-    friend valt<T> select(val<1>,const T&,const T&);
+    template<valtype T, typename T1, typename T2>
+    friend valt<T1,T2> select(T&&, T1&&, T2&&);
 
-    template<u64 N, action T>
-    friend void execute(val<N,u64>,T);
+    template<valtype T, action A>
+    friend void execute(T&&,const A&);
   };
   
   // ###########################
@@ -2193,46 +2203,50 @@ namespace hcm {
   class reg : public val<N,T> {
   public:
     using stg = flipflops<N>;
-    
+
   private:
     void create()
     {
       assert(("all storage (reg,ram) must have the same lifetime",!storage_destroyed));
       panel.update_storage(N);
     }
-    
+
   public:
-    
+
     reg() : val<N,T>() {create();}
 
     reg(const std::convertible_to<T> auto &x) : val<N,T>(x) {create();}
 
     template<u64 M, arith U>
-    reg(const val<M,U> &x) : val<N,T>(x) {create();}
+    reg(val<M,U> &x) : val<N,T>(x) {create();}
 
-    reg(const reg &other)
+    reg(reg &other)
     {
       val<N,T>::operator=(other);
       create();
     }
+
+    reg(reg &&) = delete;
     
     ~reg()
     {
       storage_destroyed = true;
     }
 
-    void assign(const auto &other)
+    void assign(auto & other)
     {
       val<N,T>::operator=(other);
       panel.update_energy(stg::write_energy_fJ);
     }
     
-    void operator= (const reg& other)
+    void operator= (reg & other)
     {
       assign(other);
     }
+
+    void operator= (reg && other) = delete;
     
-    void operator= (const auto &other)
+    void operator= (auto && other)
     {
       assign(other);
     }
@@ -2255,19 +2269,19 @@ namespace hcm {
 
     std::array<T,N> a {};
 
-    void copy_from(const arr &other)
+    template<arrtype U>
+    void copy_from(U &&other)
     {
+      static_assert(other.size == N);
       for (u64 i=0; i<N; i++) a[i] = other.a[i];
     }
-    
-    void operator= (const arr &other) requires (! regtype<T>)
-    {
-      copy_from(other);
-    }
 
+    void operator= (arr &other) {copy_from(other);}
+    void operator= (arr &&other) {copy_from(other);}
+    
     void operator&() = delete;
 
-    auto get() const
+    auto get()
     {
       std::array<typename T::type,N> b;
       for (int i=0; i<N; i++) b[i] = a[i].get();
@@ -2313,17 +2327,31 @@ namespace hcm {
       }
     }
 
-    arr(const arr &other) {copy_from(other);}    
+    arr(arr &other) {copy_from(other);} 
+    arr(arr &&other) : arr(other) {}
+    arr(arrtype auto &&other) {copy_from(other);}
+    
+    void operator= (arr &other) requires (regtype<T>)
+    {
+      copy_from(other);
+    }
 
-    void operator= (const arr &other) requires (regtype<T>)
+    void operator= (arr &&other) requires (regtype<T>)
+    {
+      copy_from(other);
+    }
+
+    template<arrtype U> requires (regtype<T>)
+    void operator= (U &&other)
     {
       copy_from(other);
     }
     
-    T get(u64 i) const
+    
+    T get(u64 i)
     {
       assert(i<N);
-      return a[i];
+      return a[i].get();
     }
     
     T& operator [] (u64 i)
@@ -2332,17 +2360,17 @@ namespace hcm {
       return a[i];
     }
 
-    void print(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
+    void print(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
-      for (u64 i=0; i<N; i++) a[i].print(t,before+std::to_string(i)+": ",after,os);
+      for (u64 i=0; i<N; i++) a[i].print(before+std::to_string(i)+": ",after,t,os);
     }
 
-    void printb(bool t=true, std::string before="", std::string after="\n", std::ostream & os=std::cout) const
+    void printb(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
-      for (u64 i=0; i<N; i++) a[i].printb(t,before+std::to_string(i)+": ",after,os);
+      for (u64 i=0; i<N; i++) a[i].printb(before+std::to_string(i)+": ",after,t,os);
     }
 
-    auto concat() const requires std::unsigned_integral<typename T::type>
+    auto concat() requires std::unsigned_integral<typename T::type>
     {
       // element 0 is at rightmost position
       // no transistors (TODO: wires)
@@ -2354,19 +2382,19 @@ namespace hcm {
       return val<N*T::size> {y,time()};
     }
 
-    [[nodiscard]] auto append(const std::convertible_to<valt<T>> auto& x) const
+    [[nodiscard]] auto append(std::convertible_to<valt<T>> auto && x)
     {
       // no transistors
       arr<valt<T>,N+1> b;
       for (int i=0; i<N; i++) {
 	b[i] = a[i];
       }
-      b[N] = x;
+      b[N] = std::forward<decltype(x)>(x);
       return b;
     }
     
     template<u64 M>
-    val<M> extract(u64 pos) const requires std::unsigned_integral<typename T::type>
+    val<M> extract(u64 pos) requires std::unsigned_integral<typename T::type>
     {
       // no transistors
       static_assert(M!=0);
@@ -2388,7 +2416,7 @@ namespace hcm {
     }
 
     template<u64 W, u64 NBITS>
-    auto make_array() const requires std::unsigned_integral<typename T::type>
+    auto make_array() requires std::unsigned_integral<typename T::type>
     {
       // no transistors
       static_assert(W!=0 && NBITS!=0);
@@ -2404,7 +2432,7 @@ namespace hcm {
       return b;
     }   
     
-    valt<T> xor_all() const
+    valt<T> xor_all()
     {
       if constexpr (N>=2) {
 	static constexpr circuit c = XOR<N> * T::size;
@@ -2471,8 +2499,8 @@ namespace hcm {
     
     std::vector<writeop> writes; // pending writes
 
-    ram(const ram &) = delete;
-    ram& operator= (const ram&) = delete;
+    ram(ram &) = delete;
+    ram& operator= (ram&) = delete;
     void operator& () = delete;
 
   public:
@@ -2492,7 +2520,7 @@ namespace hcm {
       }
     }
 
-    void write(const ival auto& address, const std::convertible_to<T> auto& dataval)
+    void write(ival auto && address, std::convertible_to<T> auto && dataval)
     {
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
@@ -2509,7 +2537,7 @@ namespace hcm {
       }
     }
 
-    T read(const ival auto& address)
+    T read(ival auto && address)
     {
       if (! exec.active) return {};
       panel.update_energy(static_ram::EREAD);
@@ -2547,7 +2575,7 @@ namespace hcm {
   
   template<u64 N, u64 M, arith T = u64>
   class rom {
-    val<M,T> a[N];
+    val<M,T> a[N]; // TODO: make it raw data instead
     
   public:
 
@@ -2565,7 +2593,7 @@ namespace hcm {
       for (int i=0; i<N; i++) a[i] = x[i];
     }
 
-    val<M,T> read(const ival auto& address) const
+    val<M,T> read(ival auto && address)
     {
       auto i = proxy::get(address);
       assert(i<N);
@@ -2583,61 +2611,61 @@ namespace hcm {
 
   // EQUALITY
   template<valtype T1, valtype T2>
-  val<1> operator== (const T1& x1, const T2& x2)
+  val<1> operator== (T1&& x1, T2&& x2)
   {
-    static_assert(T1::size == T2::size);
-    static constexpr circuit c = EQUAL<T1::size>;
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = EQUAL<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) == proxy::get(x2), t};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
-  val<1> operator== (const T1& x1, const T2& x2)
+  val<1> operator== (T1&& x1, T2 x2)
   {
-    static constexpr circuit reduction = NOR<T1::size>;
-    circuit c = INV * ones<T1::size>(x2) + reduction; // not constexpr
+    static constexpr circuit reduction = NOR<valt<T1>::size>;
+    circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
     proxy::update_metrics(c);
     auto t = proxy::time(x1) + c.delay();
     return {proxy::get(x1) == x2, t};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
-  val<1> operator== (const T1& x1, const T2& x2)
+  val<1> operator== (T1 x1, T2&& x2)
   {
     return x2 == x1;
   }
 
   // INEQUALITY
   template<valtype T1, valtype T2>
-  val<1> operator!= (const T1& x1, const T2& x2)
+  val<1> operator!= (T1&& x1, T2&& x2)
   {
-    static_assert(T1::size == T2::size);
-    static constexpr circuit c = NEQ<T1::size>;
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = NEQ<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) != proxy::get(x2), t};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
-  val<1> operator!= (const T1& x1, const T2& x2)
+  val<1> operator!= (T1&& x1, T2 x2)
   {
-    static constexpr circuit reduction = OR<T1::size>;
-    circuit c = INV * ones<T1::size>(x2) + reduction; // not constexpr
+    static constexpr circuit reduction = OR<valt<T1>::size>;
+    circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
     proxy::update_metrics(c);
     auto t = proxy::time(x1) + c.delay();
     return {proxy::get(x1) != x2, t};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
-  val<1> operator!= (const T1& x1, const T2& x2)
+  val<1> operator!= (T1 x1, T2&& x2)
   {
     return x2 != x1;
   }
 
   // GREATER THAN
   template<valtype T1, valtype T2>
-  val<1> operator> (const T1& x1, const T2& x2)
+  val<1> operator> (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
@@ -2645,21 +2673,21 @@ namespace hcm {
   }
 
   template<valtype T1, arith T2> // second argument is a constant
-  val<1> operator> (const T1& x1, const T2& x2)
+  val<1> operator> (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) > x2, proxy::time(x1)};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
-  val<1> operator> (const T1& x1, const T2& x2)
+  val<1> operator> (T1 x1, T2&& x2)
   {
     return x2 < x1;
   }
   
   // LESS THAN
   template<valtype T1, valtype T2>
-  val<1> operator< (const T1& x1, const T2& x2)
+  val<1> operator< (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
@@ -2667,21 +2695,21 @@ namespace hcm {
   }
 
   template<valtype T1, arith T2> // second argument is a constant
-  val<1> operator< (const T1& x1, const T2& x2)
+  val<1> operator< (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) < x2, proxy::time(x1)};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
-  val<1> operator< (const T1& x1, const T2& x2)
+  val<1> operator< (T1 x1, T2&& x2)
   {
     return x2 > x1;
   }
 
   // GREATER THAN OR EQUAL
   template<valtype T1, valtype T2>
-  val<1> operator>= (const T1& x1, const T2& x2)
+  val<1> operator>= (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
@@ -2689,21 +2717,21 @@ namespace hcm {
   }
 
   template<valtype T1, arith T2> // second argument is a constant
-  val<1> operator>= (const T1& x1, const T2& x2)
+  val<1> operator>= (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) >= x2, proxy::time(x1)};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
-  val<1> operator>= (const T1& x1, const T2& x2)
+  val<1> operator>= (T1 x1, T2&& x2)
   {
     return x2 <= x1;
   }
   
   // LESS THAN OR EQUAL
   template<valtype T1, valtype T2>
-  val<1> operator<= (const T1& x1, const T2& x2)
+  val<1> operator<= (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
@@ -2711,21 +2739,21 @@ namespace hcm {
   }
 
   template<valtype T1, arith T2> // second argument is a constant
-  val<1> operator<= (const T1& x1, const T2& x2)
+  val<1> operator<= (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) <= x2, proxy::time(x1)};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
-  val<1> operator<= (const T1& x1, const T2& x2)
+  val<1> operator<= (T1 x1, T2&& x2)
   {
     return x2 >= x1;
   }
   
   // ADDITION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1,T2> operator+ (const T1& x1, const T2& x2)
+  valt<T1,T2> operator+ (T1&& x1, T2&& x2)
   {
     static constexpr circuit c = ADD<valt<T1,T2>::size>;
     proxy::update_metrics(c);
@@ -2734,24 +2762,24 @@ namespace hcm {
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
-  valt<T1,T2> operator+ (const T1& x1, const T2& x2)
+  valt<T1,T2> operator+ (T1&& x1, T2 x2)
   {
     if (x2==0) return x1;
     static constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = proxy::time(x1) + c.delay();
-    return {proxy::get(x1) + proxy::get(x2), t};
+    return {proxy::get(x1) + x2, t};
   }  
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
-  valt<T1,T2> operator+ (const T1& x1, const T2& x2)
+  valt<T1,T2> operator+ (T1 x1, T2&& x2)
   {
     return x2 + x1;
   }
 
   // CHANGE SIGN
   template<valtype T>
-  valt<T> operator- (const T& x)
+  valt<T> operator- (T&& x)
   {
     static constexpr circuit c = INV * valt<T>::size + INC<valt<T>::size>;
     proxy::update_metrics(c);
@@ -2761,7 +2789,7 @@ namespace hcm {
   
   // SUBTRACTION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1,T2> operator- (const T1& x1, const T2& x2)
+  valt<T1,T2> operator- (T1&& x1, T2&& x2)
   {
     static constexpr circuit c = SUB<valt<T1,T2>::size>;
     proxy::update_metrics(c);
@@ -2770,28 +2798,28 @@ namespace hcm {
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
-  valt<T1,T2> operator- (const T1& x1, const T2& x2)
+  valt<T1,T2> operator- (T1&& x1, T2 x2)
   {
     if (x2==0) return x1;
     static constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = proxy::time(x1) + c.delay();
-    return {proxy::get(x1) - proxy::get(x2), t};
+    return {proxy::get(x1) - x2, t};
   }
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
-  valt<T1,T2> operator- (const T1& x1, const T2& x2)
+  valt<T1,T2> operator- (T1 x1, T2&& x2)
   {
     if (x1==0) return -x2;
     static constexpr circuit c = INC<valt<T2>::size>;
     proxy::update_metrics(c);
     auto t = proxy::time(x2) + c.delay();
-    return {proxy::get(x1) - proxy::get(x2), t};
+    return {x1 - proxy::get(x2), t};
   }
   
   // LEFT SHIFT
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1> operator<< (const T1& x1, const T2& x2)
+  valt<T1> operator<< (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
@@ -2799,7 +2827,7 @@ namespace hcm {
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>)
-  valt<T1> operator<< (const T1& x1, const T2& x2)
+  valt<T1> operator<< (T1&& x1, T2 x2)
   {
     // no transistors
     return {proxy::get(x1) << x2, proxy::time(x1)};
@@ -2807,7 +2835,7 @@ namespace hcm {
   
   // RIGHT SHIFT
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1> operator>> (const T1& x1, const T2& x2)
+  valt<T1> operator>> (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
@@ -2815,45 +2843,45 @@ namespace hcm {
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>)
-  valt<T1> operator>> (const T1& x1, const T2& x2)
+  valt<T1> operator>> (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) >> proxy::get(x2), proxy::time(x1)};
+    return {proxy::get(x1) >> x2, proxy::time(x1)};
   }
 
   // MULTIPLICATION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1,T2> operator* (const T1& x1, const T2& x2)
+  valt<T1,T2> operator* (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
     return {proxy::get(x1) * proxy::get(x2), t};
   }
 
-  template<valtype T1, ival T2> requires (ival<T1>) // second argument is a constant
-  valt<T1,T2> operator* (const T1& x1, const T2& x2)
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
+  valt<T1,T2> operator* (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) * x2, proxy::time(x1)};
   }
 
-  template<ival T1, valtype T2> requires (ival<T2>) // first argument is a constant
-  valt<T1,T2> operator* (const T1& x1, const T2& x2)
+  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
+  valt<T1,T2> operator* (T1 x1, T2&& x2)
   {
     return x2 * x1;
   }
 
   // DIVISION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1> operator/ (const T1& x1, const T2& x2)
+  valt<T1> operator/ (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
     return {proxy::get(x1) / proxy::get(x2), t};
   }
 
-  template<valtype T1, ival T2> requires (ival<T1>) // divisor is a constant
-  valt<T1> operator/ (const T1& x1, const T2& x2)
+  template<valtype T1, std::integral T2> requires (ival<T1>) // divisor is a constant
+  valt<T1> operator/ (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) / x2, proxy::time(x1)};
@@ -2861,39 +2889,39 @@ namespace hcm {
   
   // MODULO (REMAINDER)
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T2> operator% (const T1& x1, const T2& x2)
+  valt<T2> operator% (T1&& x1, T2&& x2)
   {
     // TODO
     auto t = max(proxy::time(x1),proxy::time(x2));
     return {proxy::get(x1) % proxy::get(x2), t};
   }
 
-  template<valtype T1, ival T2> requires (ival<T1>) // modulus is a constant
-  valt<T2> operator% (const T1& x1, const T2& x2)
+  template<valtype T1, std::integral T2> requires (ival<T1>) // modulus is a constant
+  valt<T2> operator% (T1&& x1, T2 x2)
   {
     // TODO
     return {proxy::get(x1) % x2, proxy::time(x1)};
   }
-  
+
   // BITWISE AND
   template<valtype T1, valtype T2>
-  valt<T1,T2> operator& (const T1& x1, const T2& x2)
+  valt<T1,T2> operator& (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = AND<2> * min(T1::size,T2::size);
+    static constexpr circuit c = AND<2> * min(valt<T1>::size,valt<T2>::size);
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) & proxy::get(x2), t};
   }
 
-  template<valtype T1,  std::integral T2> // second argument is constant
-  valt<T1> operator& (const T1& x1, const T2& x2)
+  template<valtype T1, std::integral T2> // second argument is constant
+  valt<T1> operator& (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) & proxy::get(x2), proxy::time(x1)};
+    return {proxy::get(x1) & x2, proxy::time(x1)};
   }
 
   template<std::integral T1, valtype T2> // first argument is constant
-  valt<T2> operator& (const T1& x1, const T2& x2)
+  valt<T2> operator& (T1 x1, T2&& x2)
   {
     // no transistors
     return x2 & x1;
@@ -2901,23 +2929,23 @@ namespace hcm {
   
   // BITWISE OR
   template<valtype T1, valtype T2>
-  valt<T1,T2> operator| (const T1& x1, const T2& x2)
+  valt<T1,T2> operator| (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = OR<2> * min(T1::size,T2::size);
+    static constexpr circuit c = OR<2> * min(valt<T1>::size,valt<T2>::size);
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) | proxy::get(x2), t};
   }
 
-  template<valtype T1,  std::integral T2> // second argument is constant
-  valt<T1> operator| (const T1& x1, const T2& x2)
+  template<valtype T1, std::integral T2> // second argument is constant
+  valt<T1> operator| (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) | proxy::get(x2), proxy::time(x1)};
+    return {proxy::get(x1) | x2, proxy::time(x1)};
   }
 
   template<std::integral T1, valtype T2> // first argument is constant
-  valt<T2> operator| (const T1& x1, const T2& x2)
+  valt<T2> operator| (T1 x1, T2&& x2)
   {
     // no transistors
     return x2 | x1;
@@ -2925,31 +2953,31 @@ namespace hcm {
 
   // BITWISE EXCLUSIVE OR
   template<valtype T1, valtype T2>
-  valt<T1,T2> operator^ (const T1& x1, const T2& x2)
+  valt<T1,T2> operator^ (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = XOR<2> * min(T1::size,T2::size);
+    static constexpr circuit c = XOR<2> * min(valt<T1>::size,valt<T2>::size);
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) ^ proxy::get(x2), t};
   }
 
-  template<valtype T1,  std::integral T2> // second argument is constant
-  valt<T1> operator^ (const T1& x1, const T2& x2)
+  template<valtype T1, std::integral T2> // second argument is constant
+  valt<T1> operator^ (T1&& x1, T2 x2)
   {
-    circuit c = INV * ones<T1::size>(x2); // not constexpr
-    proxy::update_metrics(c);
-    return {proxy::get(x1) ^ proxy::get(T1(x2)), proxy::time(x1)+c.delay()};
+    circuit c = INV * ones<valt<T1>::size>(x2); // not constexpr
+    proxy::update_metrics(c);;
+    return {proxy::get(x1) ^ x2, proxy::time(x1)+c.delay()};
   }
 
   template<std::integral T1, valtype T2> // first argument is constant
-  valt<T2> operator^ (const T1& x1, const T2& x2)
+  valt<T2> operator^ (T1 x1, T2&& x2)
   {
     return x2 ^ x1;
   }
 
   // BITWISE COMPLEMENT
   template<valtype T>
-  valt<T> operator~ (const T& x)
+  valt<T> operator~ (T&& x)
   {
     static constexpr circuit c = INV * valt<T>::size;
     proxy::update_metrics(c);
@@ -2958,7 +2986,7 @@ namespace hcm {
 
   // CONCATENATE BITS
   template<valtype T1, valtype T2, valtype... T>
-  auto concat(const T1& x1, const T2& x2, const T&... x)
+  auto concat(T1&& x1, T2&& x2, T&&... x)
   {
     // no transistors (TODO: wires)
     auto t = std::max({proxy::time(x1),proxy::time(x2),proxy::time(x)...});
@@ -2975,19 +3003,20 @@ namespace hcm {
 
   // MAKE ARRAY
   template<typename... T> 
-  auto make_array(const T&... args)
+  auto make_array(T&&... args)
   {
     using U = valt<T...>;
-    static constexpr u64 N = sizeof...(T);
+    static constexpr u64 N = sizeof...(args);
     arr<U,N> a = {U{args}...};
     return a;
   }
   
   // SELECT BETWEEN TWO VALUES
-  template<valtype T>
-  valt<T> select(val<1> cond, const T& x1, const T& x2)
+  template<valtype T, typename T1, typename T2>
+  valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
   {
-    static constexpr auto c = MUX<2,T::size>;
+    static_assert(valt<T>::size == 1);
+    static constexpr auto c = MUX<2,valt<T1,T2>::size>;
     proxy::update_metrics(c[0]); // MUX select
     proxy::update_metrics(c[1]); // MUX data    
     auto t = std::max({proxy::time(cond)+std::lround(c[0].d),proxy::time(x1),proxy::time(x2)}) + std::lround(c[1].d);
@@ -3001,19 +3030,19 @@ namespace hcm {
   // CONDITIONAL EXECUTION
   // this primitive is too useful not to be provided,
   // however its own delay and energy cost is not modeled, and I do not see an easy way to model it
-  template<u64 N, action T>
-  void execute(val<N> mask, T f)
+  template<valtype T, action A>
+  void execute(T && mask, const A& f)
   {
     auto prev_exec = exec;
     u64 m = proxy::get(mask);
     auto t = proxy::time(mask);
-    for (u64 i=0; i<N; i++) {
+    for (u64 i=0; i<valt<T>::size; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
       //if (!cond) continue;
       // to prevent cheating, we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
-      if constexpr (std::invocable<T>) {
+      if constexpr (std::invocable<A>) {
 	f();
       } else {
 	f(i);
