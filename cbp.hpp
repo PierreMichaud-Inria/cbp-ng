@@ -46,6 +46,7 @@ public:
   void run(predictor &p, int trace_length=10)
   {
     for (int i=0; i<trace_length; i++) {
+      hcm::panel.next_cycle();
       nbranch++;
       auto [pc,dir] = next_branch();
       hcm::val<1> pred = p.predict(pc);

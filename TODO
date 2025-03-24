@@ -7,8 +7,6 @@
  
 * missing operations: >, <, >=, <=, *, <<, >>, %, /
 
-* currently, RAM writes are free wrt SRAM bandwidth (single R/W port)
-
 * hardware complexity of data transfers
 
 * general reduction primitive for class arr
@@ -17,4 +15,7 @@
 
 * CAM?
 
-* manual
+* user manual
+
+* RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
+

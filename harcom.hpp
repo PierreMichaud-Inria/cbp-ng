@@ -669,7 +669,7 @@ namespace hcm {
 	stage = stage || (gate[nand_stage][w].make(cload,scale,bias) * ngates[nand_stage][w]);
       }
       tree = tree + stage;
-      bias = pow(bias,prev_width); // each NAND/NOR stage reduces switching probability
+      bias = pow(bias,prev_width); // each NAND/NOR stage reduces switching probability (neglect glitching)
       depth--;
       scale = next_scale;
       nand_stage ^= 1;
@@ -1860,10 +1860,12 @@ namespace hcm {
     friend class ::simulator;
   public:
     global<u64> clock_cycle_ps;
+    global<u64> cycle = 1;
     global<u64> storage;
     global<f64> energy_fJ;
     //global<u64> transistors;
   private:
+    void next_cycle() {cycle++;}
     void update_storage(u64 n) {storage += n;}
     void update_energy(f64 e) {if (exec.active) energy_fJ += e;}
 
@@ -1886,6 +1888,7 @@ namespace hcm {
 
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
+    template<u64,u64> friend class valpair;
     template<valtype, u64> friend class arr;
     template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
@@ -2050,8 +2053,8 @@ namespace hcm {
       return a;
     }
   };
-  
-  
+
+
   // ###########################
 
   class proxy {
@@ -2083,6 +2086,7 @@ namespace hcm {
     
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
+    template<u64,u64> friend class valpair;
     template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     
@@ -2194,11 +2198,29 @@ namespace hcm {
     template<valtype T1, valtype T2, valtype... T>
     friend auto concat(T1&&, T2&&, T&&...);
 
-    template<valtype T, typename T1, typename T2>
+    template<valtype T, valtype T1, valtype T2>
     friend valt<T1,T2> select(T&&, T1&&, T2&&);
 
     template<ival T, action A>
     friend void execute(T&&,const A&);
+  };
+
+  
+  // ###########################
+
+  template<u64 L, u64 R>
+  class valpair {
+  public:
+    val<L> left;
+    val<R> right;
+
+    valpair(ival auto && x)
+    {
+      auto t = proxy::time(x);
+      auto data = proxy::get(x);
+      right = {data,t};
+      left = {data>>R,t};
+    }
   };
   
   // ###########################
@@ -2488,7 +2510,8 @@ namespace hcm {
 
   private:
     valuetype data[N];
-    u64 next_read_time = 0;
+    u64 last_read_cycle = 0;
+    u64 last_write_cycle = 0;
 
     struct writeop {
       u64 addr{};
@@ -2529,32 +2552,27 @@ namespace hcm {
 
     void write(ival auto && address, std::convertible_to<T> auto && dataval)
     {
+      assert(("single RAM write per cycle",panel.cycle>last_write_cycle));
+      last_write_cycle = panel.cycle;
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
       u64 t = max(proxy::time(address),proxy::time(dataval)); // TODO: write latency?
-      if (t <= next_read_time) {
-	// write immediately
-	u64 addr = proxy::get(address);
-	assert(addr<N);
-	data[addr] = proxy::get(dataval);
-      } else {
-	// write in the future
-	writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
-	std::push_heap(writes.begin(),writes.end());
-      }
+      writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
+      std::push_heap(writes.begin(),writes.end());
     }
 
     T read(ival auto && address)
     {
+      assert(("single RAM read per cycle",panel.cycle>last_read_cycle));
+      last_read_cycle = panel.cycle;
       if (! exec.active) return {};
       panel.update_energy(static_ram::EREAD);
-      u64 t = max(proxy::time(address),next_read_time); // time at which the read starts
+      u64 t = proxy::time(address); // time at which the read starts
       while (! writes.empty() && writes[0].t <= t) {
 	writes[0].commit(*this);
 	std::pop_heap(writes.begin(),writes.end());
 	writes.pop_back();
       }
-      next_read_time = t + panel.clock_cycle_ps;
       u64 addr = proxy::get(address);
       assert(addr<N);
       t += std::llround(static_ram::LATENCY); // time at which the read completes
@@ -2762,7 +2780,8 @@ namespace hcm {
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1,T2> operator+ (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = ADD<valt<T1,T2>::size>;
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = ADD<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) + proxy::get(x2), t};
@@ -2798,7 +2817,8 @@ namespace hcm {
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1,T2> operator- (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = SUB<valt<T1,T2>::size>;
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = SUB<valt<T1>::size>;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) - proxy::get(x2), t};
@@ -2914,7 +2934,8 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator& (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = AND<2> * min(valt<T1>::size,valt<T2>::size);
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = AND<2> * valt<T1>::size;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) & proxy::get(x2), t};
@@ -2938,7 +2959,8 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator| (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = OR<2> * min(valt<T1>::size,valt<T2>::size);
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = OR<2> * valt<T1>::size;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) | proxy::get(x2), t};
@@ -2962,7 +2984,8 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator^ (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = XOR<2> * min(valt<T1>::size,valt<T2>::size);
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr circuit c = XOR<2> * valt<T1>::size;
     proxy::update_metrics(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) ^ proxy::get(x2), t};
@@ -3019,11 +3042,12 @@ namespace hcm {
   }
   
   // SELECT BETWEEN TWO VALUES
-  template<valtype T, typename T1, typename T2>
+  template<valtype T, valtype T1, valtype T2>
   valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
   {
     static_assert(valt<T>::size == 1);
-    static constexpr auto c = MUX<2,valt<T1,T2>::size>;
+    static_assert(valt<T1>::size == valt<T2>::size);
+    static constexpr auto c = MUX<2,valt<T1>::size>;
     proxy::update_metrics(c[0]); // MUX select
     proxy::update_metrics(c[1]); // MUX data    
     auto t = std::max({proxy::time(cond)+std::lround(c[0].d),proxy::time(x1),proxy::time(x2)}) + std::lround(c[1].d);

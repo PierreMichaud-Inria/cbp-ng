@@ -12,10 +12,12 @@ struct path_history {
   arr<reg<64>,N> h;
   reg<R> hr;
   
-  void update(ival auto in)
+  void update(auto in)
   {
+    constexpr u64 K = in.size;
     if constexpr (N==0) {
-      hr = (hr << 1) ^ in;
+      auto [left,right] = valpair<64-K,K>{hr<<1};
+      hr = concat(left,right^in);
     } else {
       if constexpr (R!=0) {
 	hr = concat(val<R-1>(hr),h[N-1][63]);
@@ -23,7 +25,8 @@ struct path_history {
       for (int i=N-1; i>=1; i--) {
 	h[i] = concat(val<63>(h[i]),h[i-1][63]);
       }
-      h[0] = (h[0] << 1) ^ in;
+      auto [left,right] = valpair<64-K,K>{h[0]<<1};
+      h[0] = concat(left,right^in);
     }
   }
 
@@ -59,7 +62,7 @@ struct tage : predictor {
   static constexpr u64 WEAK1 = 1<<(CTR-1);
   static constexpr u64 WEAK0 = WEAK1-1;
   static constexpr u64 METABITS = 4;
-  
+
   ram<val<2>,NB> bim; // bimodal table
   ram<val<TAGW>,NG> gtag[NUMG]; // global tables tags
   ram<val<CTR>,NG> gctr[NUMG]; // global tables counters
@@ -138,13 +141,13 @@ struct tage : predictor {
     // find longest match
     match = tagcmp.append(1).concat(); // bimodal is default when no match
     match1 = match.priority_encode();
-    pred1 = (match1 & preds) != 0;    
+    pred1 = (match1 & preds) != 0;
     // find second longest match
     match2 = (match^match1).priority_encode();
     pred2 = (match2 & preds) != 0;
 #ifdef USE_META
     arr<val<1>,NUMG> weakctr = [&](int i) {return readc[i]==WEAK0 | readc[i]==WEAK1;};
-    newly_alloc = (match1 & weakctr.concat() & ~readu.concat()) != 0;
+    newly_alloc = (val<NUMG>(match1) & weakctr.concat() & ~readu.concat()) != 0;
     prediction = select(newly_alloc & meta[METABITS-1],pred2,pred1);
 #else
     prediction = pred1;
@@ -157,26 +160,12 @@ struct tage : predictor {
     // TODO: periodic reset of u bits
     val<1> goodpred = (prediction == dir);
     val<1> mispred = (prediction != dir);
-    // update the counter that provided the prediction
-    auto update_counter = [&] (int i) {
-      if (i<NUMG) {
-	gctr[i].write(gi[i],update_ctr(readc[i],dir));
-      } else {
-	bim.write(bi,update_ctr(readb,dir));
-      }
-    };
-    execute(match1,update_counter);
-    arr<val<1>,NUMG> gpreds = [&](int i) {return readc[i][CTR-1];};
-    val<NUMG+1> preds = gpreds.append(readb[1]).concat();
     val<1> altdiff = (match2 != 0) & (pred2 != pred1);
 #ifdef USE_META
     execute(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
 #endif
-    // update u bit of providing entry
-    val<NUMG> umask = match1 & altdiff.make_array<NUMG>().concat();
-    execute(umask,[&](int i){ubit[i].write(gi[i],goodpred);});
     val<NUMG> mispmask = mispred.make_array<NUMG>().concat();
-    val<NUMG> postmask = mispmask & (match1-1); // histories longer than providing entry ("post" entries)
+    val<NUMG> postmask = mispmask & val<NUMG>(match1-1); // histories longer than providing entry ("post" entries)
     val<NUMG> candallocmask = postmask & ~readu.concat(); // candidate post entries for allocation
     // if multiple candidate entries, we select a single one
     val<NUMG> collamask = candallocmask.reverse();
@@ -185,17 +174,23 @@ struct tage : predictor {
     val<2> rand2 = rand();
     val<NUMG> collamask12 = select(rand2==0,collamask2,collamask1);
     val<NUMG> allocmask = collamask12.reverse();
-    auto allocate = [&] (int i) {
-      gtag[i].write(gi[i],gt[i]);
-      ubit[i].write(gi[i],0);
-      val<CTR> initctr = dir.make_array<CTR>().concat() ^ WEAK0;
-      gctr[i].write(gi[i],initctr);
-    };
-    execute(allocmask,allocate);
+    // update the bimodal counter if it provided the prediction
+    execute(match1[NUMG], [&](){bim.write(bi,update_ctr(readb,dir));});
+    // update the global counter if it provided the prediction or is in the allocated entry
+    execute(val<NUMG>(match1) | allocmask, [&](u64 i) {
+      val<CTR> newgctr = select(match1[i], update_ctr(readc[i],dir), select(dir,val<CTR>{WEAK1},val<CTR>{WEAK0}));
+      gctr[i].write(gi[i],newgctr);
+    });
+    // update the tag in the allocated entry
+    execute(allocmask, [&](u64 i){gtag[i].write(gi[i],gt[i]);});
+    // update the ubit
+    val<NUMG> umask = val<NUMG>(match1) & altdiff.make_array<NUMG>().concat(); // u bit of providing entry
     // if all post entries have the u bit set, reset their u bits
     val<1> noalloc = (candallocmask == 0);
     val<NUMG> uclearmask = postmask & noalloc.make_array<NUMG>().concat();
-    execute(uclearmask,[&](int i){ubit[i].write(gi[i],0);});
+    execute(umask | allocmask | uclearmask, [&](u64 i) {
+      ubit[i].write(gi[i],select(umask[i],goodpred,val<1>{0}));
+    });
     // update path history
     ph.update(concat(val<5>{pc},dir));
   }
