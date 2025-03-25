@@ -38,15 +38,11 @@ public:
   simulator()
   {
     hcm::panel.clock_cycle_ps = 250;
-    hcm::panel.clock_cycle_ps.print("clock cycle (ps): ");
-    std::cout << std::setprecision(3);
-    std::cout << "clock frequency (GHz): " << 1000./hcm::panel.clock_cycle_ps << std::endl;
   }
-  
+
   void run(predictor &p, int trace_length=10)
   {
     for (int i=0; i<trace_length; i++) {
-      hcm::panel.next_cycle();
       nbranch++;
       auto [pc,dir] = next_branch();
       hcm::val<1> pred = p.predict(pc);
@@ -58,6 +54,7 @@ public:
 	nmisp++;
       }
       p.update(pc,dir);
+      hcm::panel.next_cycle();
     }
   }
 
@@ -68,11 +65,7 @@ public:
     std::cout << "mispredicted: " << nmisp << std::endl;
     if (nbranch!=0)
       std::cout << "mispredict ratio: " << f64(nmisp)/nbranch << std::endl;
-    std::cout << std::setprecision(3);
-    hcm::panel.storage.print("storage (bits): ");
+    hcm::panel.print();
     std::cout << "max prediction latency (cycle): " << double(max_pred_lat_ps) / hcm::panel.clock_cycle_ps << std::endl;
-    if (t!=0) {
-      std::cout << "power (mW): " << hcm::panel.energy_fJ / t << std::endl;
-    }
   }
 };

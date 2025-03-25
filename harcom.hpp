@@ -284,8 +284,8 @@ namespace hcm {
     assert(proba_switch <= 0.5); // random switching (Bernoulli process)
     return 0.5 * (1-sqrt(1-2*proba_switch)); // does not exceed 1/2
   }
-  
-  
+
+
   struct circuit {
     u64 t = 0; // transistors
     f64 d = 0; // delay (ps)
@@ -312,8 +312,7 @@ namespace hcm {
     }
 
     u64 delay() const {return llround(d);}
-    f64 energy() const {return e;}
-    
+
     void print(std::string s = "", std::ostream & os = std::cout) const
     {
       os << s;
@@ -394,7 +393,7 @@ namespace hcm {
     }
   };
 
-  
+
   struct basic_gate {
     using cilist = std::initializer_list<f64>;
     static constexpr u64 MAX_INPUT_TYPES = 3;
@@ -416,7 +415,7 @@ namespace hcm {
     }
 
     constexpr basic_gate() {}
-    
+
     constexpr basic_gate(u64 tr, cilist cl, f64 p, f64 cg) : tr(tr), cp(p*PINV), cg(cg)
     {
       init_ci(cl);
@@ -435,7 +434,7 @@ namespace hcm {
       assert(I<nci);
       return ci[I] / INVCAP;
     }
-    
+
     constexpr circuit make(f64 co, f64 scale=1, f64 bias=0.5) const
     {
       //  co = output (load) capacitance relative to CGATE
@@ -447,7 +446,7 @@ namespace hcm {
     }
   };
 
-  
+
   struct inv : basic_gate { // inverter
     constexpr inv() : basic_gate(2,{INVCAP},INVCAP,INVCAP) {}
   };
@@ -1189,19 +1188,21 @@ namespace hcm {
     } ();
 
     static constexpr u64 xtors = flops.t + clocking.t;
+    static constexpr u64 xtors_scaled = llround(flops.cg + clocking.cg);
 
     // clocking.e corresponds to a transition probability of 0.5
     // actually, the clock transitions with probability 1 twice per write
     static constexpr f64 write_energy_fJ = flops.e + clocking.e * 4;
   };
 
-  
+
   // ###########################
 
   template<typename T>
   struct sram_common {
     static constexpr u64 NBITS = T::num_bits();
-    static constexpr u64 XTORS = T::num_transistors();
+    static constexpr u64 XTORS = T::num_xtors(false);
+    static constexpr u64 XTORS_SCALED = T::num_xtors(true);
     static constexpr f64 LATENCY = T::read_latency(); // ps
     static constexpr f64 EREAD = T::read_energy(); // fJ
     static constexpr f64 EWRITE = T::write_energy(); // fJ
@@ -1227,7 +1228,7 @@ namespace hcm {
 
   struct sram_null {
     static constexpr u64 num_bits() {return 0;}
-    static constexpr u64 num_transistors() {return 0;}
+    static constexpr u64 num_xtors(bool scaled) {return 0;}
     static constexpr f64 read_latency() { return 0;}
     static constexpr f64 read_energy() {return 0;}
     static constexpr f64 write_energy() {return 0;}
@@ -1361,14 +1362,14 @@ namespace hcm {
     static constexpr circuit ABUS = (buffer<SEFF,SMAX>(RDEC.ci,false) * std::bit_width(N-1)) || (buffer<SEFF,SMAX>(COLSELCAP,false) * std::bit_width(M/D-1));   
     static constexpr const circuit &WBUS = WDR[1];
     static constexpr circuit WLSEL = ABUS + RDEC;
-    
+
     static constexpr f64 EWCL = D * 2 * inv{}.make(INVCAP).e; // cell energy per write
     static constexpr f64 EWL = 2 * energy_fJ(WLCAP_fF*M,VDD); // one wordline switches on and off
     // currently, assume perfect bitline voltage clamping (TODO?)
     // half-selected bitlines (D<M) consume energy on read (neglect on write, TODO?)
     static constexpr f64 EBLR = M * energy_fJ(N*BLCAP_fF,BLSWING) * 2; // bitline read + precharge
     static constexpr f64 EBLW = D * energy_fJ(N*BLCAP_fF,VDD) * 2; // bitline write + precharge
-    
+
     static constexpr u64 CELL_XTORS = SRAM_CELL.transistors * N * M;
     static constexpr u64 PERI_XTORS = WLSEL.t + SA.t + WDR[0].t + WDR[1].t + CMUX[0].t + CMUX[1].t;
     static constexpr f64 PERI_GATECAP = WLSEL.cg + SA.cg + WDR[0].cg + WDR[1].cg + CMUX[0].cg + CMUX[1].cg;
@@ -1381,10 +1382,19 @@ namespace hcm {
     static constexpr f64 ASPECT_RATIO = CELLS_WIDTH / CELLS_HEIGHT;
 
     static constexpr u64 num_bits() {return N * M;}
-    static constexpr u64 num_transistors() {return CELL_XTORS + PERI_XTORS;}
     static constexpr f64 array_width() {return sqrt(AREA*ASPECT_RATIO);} // um
     static constexpr f64 array_height() {return sqrt(AREA/ASPECT_RATIO);} // um
 
+    static constexpr u64 num_xtors(bool scaled)
+    {
+      if (scaled) {
+	// a scale-S transistor counts like S scale-1 transistors
+	return CELL_XTORS + llround(PERI_GATECAP);
+      } else {
+	return CELL_XTORS + PERI_XTORS;
+      }
+    }
+    
     static constexpr f64 read_latency()
     {
       return max(WLSEL.d + WLRC + BLDELAY + SADELAY, CMUX[0].d) + CMUX[1].d; // ps
@@ -1451,13 +1461,21 @@ namespace hcm {
     static constexpr circuit WBUS = BANK::WBUS * NB || BANKR::WBUS;
     
     static constexpr u64 num_bits() {return BANK::NBITS * NB + BANKR::NBITS;}
-    static constexpr u64 num_transistors() {return BANK::XTORS * NB + BANKR::XTORS + ABUS.t;}
     static constexpr f64 read_latency() { return ABUS.d + BANK::LATENCY;}
     static constexpr f64 read_energy() {return ABUS.e + BANK::EREAD * NB + BANKR::EREAD;}
     static constexpr f64 write_energy() {return ABUS.e + BANK::EWRITE * NB + BANKR::EWRITE;}
     static constexpr f64 array_width() {return BANK::WIDTH * NB + BANKR::WIDTH;}
     static constexpr f64 array_height() {return BANK::HEIGHT;}
 
+    static constexpr u64 num_xtors(bool scaled)
+    {
+      if (scaled) {
+	return BANK::XTORS_SCALED * NB + BANKR::XTORS_SCALED + ABUS.cg;
+      } else {
+	return BANK::XTORS * NB + BANKR::XTORS + ABUS.t;
+      }
+    }
+    
     static void print2(std::string s = "", std::ostream & os = std::cout)
     {
       os << s;
@@ -1519,12 +1537,20 @@ namespace hcm {
     }
     
     static constexpr u64 num_bits() {return NB * BANK::NBITS;}
-    static constexpr u64 num_transistors() {return NB * BANK::XTORS + ACC.t + WTREE.t + RTREE[0].t + RTREE[1].t;}
     static constexpr f64 read_latency() {return READ.d;}
     static constexpr f64 read_energy() {return READ.e;}
     static constexpr f64 write_energy() {return ACC.e + WTREE.e + BANK::EWRITE;}
     static constexpr f64 array_width() {return BANK::WIDTH * BX;}
     static constexpr f64 array_height() {return BANK::HEIGHT * BY;}
+
+    static constexpr u64 num_xtors(bool scaled)
+    {
+      if (scaled) {
+	return NB * BANK::XTORS_SCALED + ACC.cg + WTREE.cg + RTREE[0].cg + RTREE[1].cg;
+      } else {
+	return NB * BANK::XTORS + ACC.t + WTREE.t + RTREE[0].t + RTREE[1].t;
+      }
+    }
   };
 
 
@@ -1542,9 +1568,9 @@ namespace hcm {
   template<u64 E, u64 D, u64 MAXN, u64 MAXM>
   struct sram_banked;
 
-  
+
   template<u64 E, u64 D, u64 MAXN, u64 MAXM> requires (ok_config(E,D,MAXN,MAXM))
-    struct sram_banked<E,D,MAXN,MAXM> : sram_common<sram_banked<E,D,MAXN,MAXM>> {
+  struct sram_banked<E,D,MAXN,MAXM> : sram_common<sram_banked<E,D,MAXN,MAXM>> {
     static_assert(E!=0 && D!=0 && std::has_single_bit(MAXN));
     static constexpr bool ok = true;
 
@@ -1612,7 +1638,7 @@ namespace hcm {
     static constexpr u64 BY = std::get<1>(params);
     static constexpr u64 N = std::get<2>(params);
     static constexpr u64 M = std::get<3>(params);
-    
+
     using ARR = sram_array<BX,BY,N,M,D>;
     static_assert(ARR::NBITS >= E*D);
 
@@ -1626,9 +1652,9 @@ namespace hcm {
       os << std::endl;
       //ARR::print2("",os);
     }
-    
+
     static constexpr u64 num_bits() {return ARR::NBITS;}
-    static constexpr u64 num_transistors() {return ARR::XTORS;}
+    static constexpr u64 num_xtors(bool scaled) {return (scaled)? ARR::XTORS_SCALED : ARR::XTORS;}
     static constexpr f64 read_latency() {return ARR::LATENCY;}
     static constexpr f64 read_energy() {return ARR::EREAD;}
     static constexpr f64 write_energy() {return ARR::EWRITE;}
@@ -1642,7 +1668,7 @@ namespace hcm {
     static constexpr bool ok = false; 
   };
 
-  
+
   template<typename T>
   concept sram_type = requires(T& x) {[]<u64 E, u64 D, u64 N, u64 M>(sram_banked<E,D,N,M>&){}(x);};
 
@@ -1877,20 +1903,67 @@ namespace hcm {
     friend class proxy;
     friend class ::simulator;
   public:
-    global<u64> clock_cycle_ps;
-    global<u64> cycle = 1;
+    static constexpr u64 first_cycle = 1;
+    global<u64> clock_cycle_ps = 300;
+    global<u64> cycle = first_cycle;
     global<u64> storage;
     global<f64> energy_fJ;
-    //global<u64> transistors;
+    global<u64> transistors_storage;
+    global<u64> transistors_logic[2];
   private:
-    void next_cycle() {cycle++;}
-    void update_storage(u64 n) {storage += n;}
-    void update_energy(f64 e) {if (exec.active) energy_fJ += e;}
 
-    void update_metrics(const circuit &c)
+    void next_cycle()
     {
-      //transistors += c.t;
-      update_energy(c.energy());
+      assert(clock_cycle_ps != 0);
+      cycle++;
+      transistors_logic[1] = transistors_logic[0];
+      transistors_logic[0] = 0;
+    }
+
+    void update_storage(u64 nbits, u64 xtors)
+    {
+      storage += nbits;
+      transistors_storage += xtors;
+    }
+
+    void update_energy(f64 e)
+    {
+      if (exec.active) energy_fJ += e;
+    }
+
+    void update_logic(const circuit &c)
+    {
+      transistors_logic[0] += c.cg; // an N-fin transistor counts like N single-fin transistors
+      update_energy(c.e);
+    }
+
+  public:
+    f64 power_mW()
+    {
+      assert(cycle>first_cycle);
+      assert(clock_cycle_ps != 0);
+      return energy_fJ / ((cycle-first_cycle)*clock_cycle_ps);
+    }
+
+    void print(std::ostream & os = std::cout)
+    {
+      os << std::setprecision(3);
+      if (clock_cycle_ps != 0 && cycle>first_cycle) {
+	clock_cycle_ps.print("clock cycle (ps): ",os);
+	os << "clock frequency (GHz): " << 1000./clock_cycle_ps << std::endl;
+      }
+      storage.print("storage (bits): ",os);
+      transistors_storage.print("transistors (storage): ",os);
+      if (cycle == first_cycle) {
+	transistors_logic[0].print("transistors (logic): ",os);
+      } else {
+	transistors_logic[1].print("transistors (logic): ",os);
+      }
+      if (cycle == first_cycle) {
+	energy_fJ.print("energy (fJ): ",os);	
+      } else if (clock_cycle_ps != 0) {
+	os << "power (mW): " << power_mW() << std::endl;
+      }
     }
   } panel;
 
@@ -2056,7 +2129,7 @@ namespace hcm {
       constexpr circuit c = priority_encoder<N>;
       u64 x = get();
       u64 y = x & (x^(x-1));
-      panel.update_metrics(c);
+      panel.update_logic(c);
       return {y,time()+c.delay()};
     }
 
@@ -2087,7 +2160,7 @@ namespace hcm {
     static u64 time(const arrtype auto& x) {return x.time();}
 
     static void set_time(valtype auto& x, arith auto t) {x.set_time(t);}
-    static void update_metrics(const circuit &c) {panel.update_metrics(c);}
+    static void update_logic(const circuit &c) {panel.update_logic(c);}
     
     template<valtype T1, valtype T2>
     static auto concatenate(T1&& x1, T2&& x2)
@@ -2256,11 +2329,11 @@ namespace hcm {
 
   private:
     u64 last_write_cycle = 0;
-    
+
     void create()
     {
       assert(("all storage (reg,ram) must have the same lifetime",!storage_destroyed));
-      panel.update_storage(N);
+      panel.update_storage(N,stg::xtors_scaled);
     }
 
   public:
@@ -2492,12 +2565,12 @@ namespace hcm {
       }
       return b;
     }   
-    
+
     valt<T> xor_all()
     {
       if constexpr (N>=2) {
 	static constexpr circuit c = XOR<N> * T::size;
-	panel.update_metrics(c);
+	panel.update_logic(c);
 	auto x = a[0].get();
 	for (int i=1; i<N; i++) {
 	  x ^= a[i].get();
@@ -2565,10 +2638,10 @@ namespace hcm {
     void operator& () = delete;
 
   public:
-    
+
     ram()
     {
-      panel.update_storage(static_ram::NBITS);
+      panel.update_storage(static_ram::NBITS,static_ram::XTORS_SCALED);
     }
 
     ~ram()
@@ -2671,7 +2744,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = EQUAL<valt<T1>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) == proxy::get(x2), t};
   }
@@ -2681,7 +2754,7 @@ namespace hcm {
   {
     static constexpr circuit reduction = NOR<valt<T1>::size>;
     circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = proxy::time(x1) + c.delay();
     return {proxy::get(x1) == x2, t};
   }
@@ -2698,7 +2771,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = NEQ<valt<T1>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) != proxy::get(x2), t};
   }
@@ -2708,7 +2781,7 @@ namespace hcm {
   {
     static constexpr circuit reduction = OR<valt<T1>::size>;
     circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = proxy::time(x1) + c.delay();
     return {proxy::get(x1) != x2, t};
   }
@@ -2813,7 +2886,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = ADD<valt<T1>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) + proxy::get(x2), t};
   }
@@ -2823,7 +2896,7 @@ namespace hcm {
   {
     if (x2==0) return x1;
     static constexpr circuit c = INC<valt<T1>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = proxy::time(x1) + c.delay();
     return {proxy::get(x1) + x2, t};
   }  
@@ -2839,7 +2912,7 @@ namespace hcm {
   valt<T> operator- (T&& x)
   {
     static constexpr circuit c = INV * valt<T>::size + INC<valt<T>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = proxy::time(x) + c.delay();
     return {-proxy::get(x), t};
   }
@@ -2850,7 +2923,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = SUB<valt<T1>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) - proxy::get(x2), t};
   }
@@ -2860,7 +2933,7 @@ namespace hcm {
   {
     if (x2==0) return x1;
     static constexpr circuit c = INC<valt<T1>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = proxy::time(x1) + c.delay();
     return {proxy::get(x1) - x2, t};
   }
@@ -2870,7 +2943,7 @@ namespace hcm {
   {
     if (x1==0) return -x2;
     static constexpr circuit c = INC<valt<T2>::size>;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = proxy::time(x2) + c.delay();
     return {x1 - proxy::get(x2), t};
   }
@@ -2967,7 +3040,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = AND<2> * valt<T1>::size;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) & proxy::get(x2), t};
   }
@@ -2992,7 +3065,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = OR<2> * valt<T1>::size;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) | proxy::get(x2), t};
   }
@@ -3017,7 +3090,7 @@ namespace hcm {
   {
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr circuit c = XOR<2> * valt<T1>::size;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
     return {proxy::get(x1) ^ proxy::get(x2), t};
   }
@@ -3026,7 +3099,7 @@ namespace hcm {
   valt<T1> operator^ (T1&& x1, T2 x2)
   {
     circuit c = INV * ones<valt<T1>::size>(x2); // not constexpr
-    proxy::update_metrics(c);;
+    proxy::update_logic(c);;
     return {proxy::get(x1) ^ x2, proxy::time(x1)+c.delay()};
   }
 
@@ -3041,7 +3114,7 @@ namespace hcm {
   valt<T> operator~ (T&& x)
   {
     static constexpr circuit c = INV * valt<T>::size;
-    proxy::update_metrics(c);
+    proxy::update_logic(c);
     return {~proxy::get(x), proxy::time(x)+c.delay()};
   }
 
@@ -3079,8 +3152,8 @@ namespace hcm {
     static_assert(valt<T>::size == 1);
     static_assert(valt<T1>::size == valt<T2>::size);
     static constexpr auto c = MUX<2,valt<T1>::size>;
-    proxy::update_metrics(c[0]); // MUX select
-    proxy::update_metrics(c[1]); // MUX data    
+    proxy::update_logic(c[0]); // MUX select
+    proxy::update_logic(c[1]); // MUX data    
     auto t = std::max({proxy::time(cond)+std::lround(c[0].d),proxy::time(x1),proxy::time(x2)}) + std::lround(c[1].d);
     if (proxy::get(cond)) {
       return {proxy::get(x1), t};
