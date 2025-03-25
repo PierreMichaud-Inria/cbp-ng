@@ -1805,14 +1805,32 @@ namespace hcm {
   template<typename ...T>
   using valt = valt_impl<T...>::type;
 
+  template<action A>
+  struct action_return {};
+  
+  template<action A> requires (std::invocable<A>)
+  struct action_return<A> {
+    using type = std::invoke_result_t<A>;
+  };
 
+  template<action A> requires (std::invocable<A,u64>)
+  struct action_return<A> {
+    using type = std::invoke_result_t<A,u64>;
+  };
+
+  template<action A>
+  using return_type = action_return<A>::type;
+  
+  
   // ###########################
 
   class exec_control {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class globals;
-    template<ival T, action A> friend void execute(T&&,const A&);
+    template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
+      friend void execute(T&&,const A&);
+    template<valtype T, action A> friend auto execute(T&&,const A&);
   private:
     bool active = true;
     u64 time = 0;
@@ -1923,7 +1941,7 @@ namespace hcm {
     u64 time() const {return max(exec.time,timing);}
 
     void set_time(u64 t) {timing = t;}
-    
+
     void operator= (val & x)
     {
       if (! exec.active) return;
@@ -1932,9 +1950,9 @@ namespace hcm {
     }
 
     void operator= (val && x) {operator=(x);}
-    
+
     void operator&() = delete;
-    
+
   public:
     
     static constexpr u64 size = N;
@@ -2201,11 +2219,14 @@ namespace hcm {
     template<valtype T, valtype T1, valtype T2>
     friend valt<T1,T2> select(T&&, T1&&, T2&&);
 
-    template<ival T, action A>
+    template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
     friend void execute(T&&,const A&);
+
+    template<valtype T, action A>
+    friend auto execute(T&&,const A&);  
   };
 
-  
+
   // ###########################
 
   template<u64 L, u64 R>
@@ -2226,14 +2247,16 @@ namespace hcm {
   // ###########################
 
   inline global<bool> storage_destroyed = false;
-  
-  
+
+
   template<u64 N, arith T = u64>
   class reg : public val<N,T> {
   public:
     using stg = flipflops<N>;
 
   private:
+    u64 last_write_cycle = 0;
+    
     void create()
     {
       assert(("all storage (reg,ram) must have the same lifetime",!storage_destroyed));
@@ -2264,17 +2287,19 @@ namespace hcm {
 
     void assign(auto & other)
     {
+      assert(("single register write per cycle",panel.cycle>last_write_cycle));
+      last_write_cycle = panel.cycle;     
       val<N,T>::operator=(other);
       panel.update_energy(stg::write_energy_fJ);
     }
-    
+
     void operator= (reg & other)
     {
       assign(other);
     }
 
     void operator= (reg && other) = delete;
-    
+
     void operator= (auto && other)
     {
       assign(other);
@@ -2356,6 +2381,14 @@ namespace hcm {
       }
     }
 
+    template<std::convertible_to<T> U>
+    arr(const U (&b)[N])
+    {
+      for (u64 i=0; i<N; i++) {
+	a[i] = b[i];
+      }
+    }
+
     arr(arr &other) {copy_from(other);} 
     arr(arr &&other) : arr(other) {}
     arr(arrtype auto &&other) {copy_from(other);}
@@ -2375,8 +2408,7 @@ namespace hcm {
     {
       copy_from(other);
     }
-    
-    
+
     T get(u64 i)
     {
       assert(i<N);
@@ -2497,12 +2529,11 @@ namespace hcm {
   struct rawdata<T> {
     using type = std::array<typename T::type::type,T::size>;
     static constexpr u64 width = T::size * T::type::size;
-  };  
+  };
 
-  
+
   template<memdatatype T, u64 N>
   class ram {
-    // bandwidth = one read per clock cycle
   public:
     using type = T;
     using valuetype = rawdata<T>::type;
@@ -2775,7 +2806,7 @@ namespace hcm {
   {
     return x2 >= x1;
   }
-  
+
   // ADDITION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1,T2> operator+ (T1&& x1, T2&& x2)
@@ -3059,9 +3090,7 @@ namespace hcm {
   }
 
   // CONDITIONAL EXECUTION
-  // this primitive is too useful not to be provided,
-  // however its own delay and energy cost is not modeled, and I do not see an easy way to model it
-  template<ival T, action A>
+  template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
   void execute(T &&mask, const A &f)
   {
     auto prev_exec = exec;
@@ -3075,10 +3104,37 @@ namespace hcm {
       if constexpr (std::invocable<A>) {
 	f();
       } else {
+	static_assert(std::invocable<A,u64>);
 	f(i);
       }
     }
     exec = prev_exec;
+  }
+
+
+  template<valtype T, action A>
+  auto execute(T &&mask, const A &f)
+  {
+    static_assert(valtype<return_type<A>>);
+    static constexpr u64 N = valt<T>::size;
+    using rtype = valt<return_type<A>>;
+    auto prev_exec = exec;
+    u64 m = proxy::get(mask);
+    auto t = proxy::time(mask);
+    arr<rtype,N> result = [&] (u64 i) {
+      bool cond = (m>>i) & 1;
+      exec.set_state(cond,t);
+      // to prevent cheating, we execute the action even when the condition is false
+      // (otherwise, this primitive could be used to leak any bit)
+      if constexpr (std::invocable<A>) {
+	return f();
+      } else {
+	static_assert(std::invocable<A,u64>);
+	return f(i);
+      }
+    };
+    exec = prev_exec;
+    return result;
   }
   
   // ###########################
