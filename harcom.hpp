@@ -59,7 +59,9 @@ namespace hcm {
   using i64 = std::int64_t;
   using f32 = float;
   using f64 = double;
-  
+
+  template<u64> struct hard {};
+
   template<typename T>
   concept arith = std::integral<T> || std::floating_point<T>;
 
@@ -83,26 +85,19 @@ namespace hcm {
   template<typename T>
   concept memdatatype = (valtype<T> || arrtype<T>) && ! regtype<T> && ! regtype<typename T::type>;
 
-  
-  constexpr auto min(auto a, auto b)
-  {
-    return (b<a)? b : a;
-  }
 
-  constexpr auto max(auto a, auto b)
-  {
-    return (b>a)? b : a;
-  }  
+  constexpr auto min(auto a, auto b) {return (b<a)? b : a;}
+  constexpr auto max(auto a, auto b) {return (b>a)? b : a;}  
 
-  auto to_unsigned(std::integral auto x) {return std::make_unsigned_t<decltype(x)>(x);}
-  auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
-  auto to_unsigned(f64 x) {return std::bit_cast<u64>(x);}
+  constexpr auto to_unsigned(std::integral auto x) {return std::make_unsigned_t<decltype(x)>(x);}
+  constexpr inline auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
+  constexpr inline auto to_unsigned(f64 x) {return std::bit_cast<u64>(x);}
 
   template<arith T>
   inline constexpr u64 bitwidth = (std::same_as<T,bool>)? 1 : sizeof(T)*8;
   
   template<u64 N, std::integral T>
-  auto truncate(T x)
+  constexpr auto truncate(T x)
   {
     if constexpr (N >= bitwidth<T>) {
       return x;
@@ -116,8 +111,8 @@ namespace hcm {
   {
     return std::popcount(truncate<N>(to_unsigned(x)));
   }
-  
-  constexpr u64 to_pow2(f64 x)
+
+  inline constexpr u64 to_pow2(f64 x)
   {
     // returns the power of 2 closest to x
     u64 n0 = std::bit_floor(u64(llround(floor(x))));
@@ -125,7 +120,7 @@ namespace hcm {
     return (x*x > n0*n1)? n1 : n0;
   }
 
-  constexpr u8 bit_reversal(u8 x)
+  inline constexpr u8 bit_reversal(u8 x)
   {
     u8 y = x&1;
     for (int i=1; i<8; i++) {
@@ -135,7 +130,7 @@ namespace hcm {
     return y;
   }
 
-  static constexpr auto reversed_byte = [] () {
+  inline constexpr auto reversed_byte = [] () {
     std::array<u8,256> b;
     for (u64 i=0; i<256; i++) {
       b[i] = bit_reversal(i);
@@ -155,6 +150,69 @@ namespace hcm {
 	y = (y<<8) | reversed_byte[x & 0xFF];
       }
       return y;
+    }
+  }
+
+  template<u64 W, std::unsigned_integral T, u64 N>
+  auto pack_bits(const std::array<T,N> &in)
+  {
+    // input array has W-bit elements
+    // output array has 64-bit elements
+    static_assert(N!=0);
+    static constexpr u64 M = (N*W+63)/64;
+    if constexpr (W==64) {
+      static_assert(std::same_as<T,u64>);
+      return in;
+    } else {
+      static_assert(W!=0 && W<64);
+      constexpr u64 mask = (u64(1)<<W)-1;
+      std::array<u64,M> out{};
+      u64 nbits = 0;
+      for (u64 i=0; i<N; i++) {
+	u64 x = u64(in[i]) & mask;
+	u64 j = nbits / 64;
+	u64 pos = nbits % 64;
+	assert(j<M);
+	out[j] |= x << pos;
+	if (pos+W > 64) {
+	  assert(pos!=0);
+	  assert(j+1<M);
+	  out[j+1] = x >> (64-pos);
+	}
+	nbits += W;
+      }
+      return out;
+    }
+  }
+
+  template<u64 W, u64 N>
+  auto unpack_bits(const std::array<u64,N> &in)
+  {
+    // input array has 64-bit elements
+    // output array has W-bit elements
+    static_assert(N!=0);
+    constexpr u64 M = (N*64+W-1)/W;
+    if constexpr (W==64) {
+      return in;
+    } else {
+      static_assert(W!=0 && W<64);
+      constexpr u64 mask = (u64(1)<<W)-1;
+      std::array<u64,M> out{};
+      u64 nbits = 0;
+      for (u64 j=0; j<M; j++) {
+	u64 i = nbits / 64;
+	u64 pos = nbits % 64;
+	assert(i<N);
+	if (pos+W <= 64) {
+	  out[j] = (in[i] >> pos) & mask;
+	} else {
+	  u64 right = in[i] >> pos;	
+	  u64 left = (i+1<N)? in[i+1] : 0;
+	  out[j] = (right | (left << (64-pos))) & mask;
+	}
+	nbits += W;
+      }
+      return out;
     }
   }
 
@@ -252,10 +310,14 @@ namespace hcm {
   // however we underestimate the energy (2-fin transistor has larger gate capacitance)
 
   inline constexpr f64 DSE = 6; // default stage effort (delay vs energy tradeoff)
-  inline constexpr u64 DSMAX = 100; // default maximum scale (FIXME)
-  
-  
-  constexpr f64 energy_fJ(f64 cap_fF, f64 vdiff/*volt*/)
+  // The size of a transistor is limited in practice.
+  // However, for consistency with certain limitations and freedoms of the library
+  // (no floorplanning except for SRAM, so wire lengths are generally unknown and not modeled,
+  // yet the user can define unlimited fanout), we do not limit the maximum scale
+  inline constexpr u64 DSMAX = std::numeric_limits<u64>::max(); // default maximum scale is unlimited
+
+
+  inline constexpr f64 energy_fJ(f64 cap_fF, f64 vdiff/*volt*/)
   {
     // energy dissipated for changing capacitance voltage by VDIFF
     assert(vdiff>0);
@@ -263,7 +325,7 @@ namespace hcm {
   }
 
 
-  constexpr f64 wire_res_delay(f64 res/*Ohm*/, f64 wirecap_pF, f64 loadcap_pF=0)
+  inline constexpr f64 wire_res_delay(f64 res/*Ohm*/, f64 wirecap_pF, f64 loadcap_pF=0)
   {
     // approximate distributed RC line as lumped PI1 circuit (Rao, DAC 1995)
     f64 ElmoreDelay = res * (wirecap_pF/2 + loadcap_pF); // ps
@@ -272,14 +334,14 @@ namespace hcm {
   }
 
 
-  constexpr f64 proba_switch(f64 bias)
+  inline constexpr f64 proba_switch(f64 bias)
   {
     assert(bias>=0 && bias<=1);
     return 2 * bias * (1-bias);
   }
 
 
-  constexpr f64 proba_bias(f64 proba_switch)
+  inline constexpr f64 proba_bias(f64 proba_switch)
   {
     assert(proba_switch <= 0.5); // random switching (Bernoulli process)
     return 0.5 * (1-sqrt(1-2*proba_switch)); // does not exceed 1/2
@@ -298,7 +360,6 @@ namespace hcm {
     
     constexpr circuit(u64 t, f64 d, f64 ci, f64 cg, f64 bias) : t(t), d(d), ci(ci), cg(cg), e(gate_energy(bias)), w(0)
     {
-      // for gates only
       assert(t!=0);
       assert(d>0);
       assert(ci>0);
@@ -337,8 +398,8 @@ namespace hcm {
     constexpr f64 cost() const
     {
       return e*d*d;
-    }    
-    
+    }
+
     constexpr circuit operator+ (const circuit &x) const
     {
       // series (LHS output connected to RHS input)
@@ -393,7 +454,6 @@ namespace hcm {
     }
   };
 
-
   struct basic_gate {
     using cilist = std::initializer_list<f64>;
     static constexpr u64 MAX_INPUT_TYPES = 3;
@@ -445,8 +505,7 @@ namespace hcm {
       return {tr, delay_ps, cimax*scale, cg*scale, bias};
     }
   };
-
-
+  
   struct inv : basic_gate { // inverter
     constexpr inv() : basic_gate(2,{INVCAP},INVCAP,INVCAP) {}
   };
@@ -493,7 +552,6 @@ namespace hcm {
     return n;
   }
 
-  
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit buffer(f64 co, bool cpl, f64 scale=1, f64 bias=0.5)
   {
@@ -550,8 +608,32 @@ namespace hcm {
     return c;
   }
 
-  
-  constexpr circuit majority_nand3(f64 co, f64 scale=1, f64 bias=0.5)
+
+  template<u64 B=4/*branching*/>
+  constexpr circuit broadcast_tree(u64 n, f64 co=INVCAP, bool cpl=false)
+  {
+    // broadcast one bit to n outputs with a tree of inverters
+    // wires not modeled (TODO)
+    static_assert(B>=2);
+    if (n<=B) {
+      if (cpl) {
+	return inv{}.make(co*n);
+      } else {
+	circuit nogate;
+	nogate.ci = co*n;
+	return nogate;
+      }
+    }
+    u64 m = n / B;
+    u64 r = n % B;
+    u64 mm = (r==0)? m : m+1;
+    circuit stage = inv{}.make(co*B) * m;
+    if (r!=0) stage = stage || inv{}.make(co*r);
+    return broadcast_tree<B>(mm,stage.ci,cpl^1) + stage;
+  }
+
+
+  inline constexpr circuit majority_nand3(f64 co, f64 scale=1, f64 bias=0.5)
   {
     // a,b,c ==> ab+ac+bc = ~(~(ab)~(ac)~(bc))
     circuit na3 = nand{3}.make(co,scale,bias);
@@ -559,8 +641,8 @@ namespace hcm {
     return ((na | na) || na) + na3;
   }
 
-  
-  constexpr circuit majority_aoi21(f64 co, f64 scale=1, f64 bias=0.5)
+
+  inline constexpr circuit majority_aoi21(f64 co, f64 scale=1, f64 bias=0.5)
   {
     // a,b,c ==> ab+ac+bc = ~(~(b+c)|(~a&~(bc)))
     and_nor gate;
@@ -573,8 +655,8 @@ namespace hcm {
     return maj;
   }
 
-  
-  constexpr circuit majority(f64 co, f64 scale=1, f64 bias=0.5)
+
+  inline constexpr circuit majority(f64 co, f64 scale=1, f64 bias=0.5)
   {
     return majority_aoi21(co,scale,bias);
   }
@@ -689,7 +771,7 @@ namespace hcm {
     return tree;
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit anding(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
@@ -703,22 +785,22 @@ namespace hcm {
     return nand_nor_tree<SE,SMAX>(n,false,false,co,scale,bias);
   }  
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit nanding(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return nand_nor_tree<SE,SMAX>(n,true,true,co,scale,bias);
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit noring(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return nand_nor_tree<SE,SMAX>(n,false,true,co,scale,bias);
   }  
 
-  
-  constexpr circuit xor2(f64 co, f64 scale=1, f64 bias=0.5)
+
+  inline constexpr circuit xor2(f64 co, f64 scale=1, f64 bias=0.5)
   {
     circuit x = xor_cpl{}.make(co,scale,bias);
     circuit i = inv{}.make(x.ci,scale,bias);
@@ -728,13 +810,13 @@ namespace hcm {
   }
 
   
-  constexpr circuit xnor2(f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit xnor2(f64 co, f64 scale=1, f64 bias=0.5)
   {
     return xor2(co,scale,bias);
   }  
 
   
-  constexpr circuit parity_small(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit parity_small(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     // XOR tree
     if (n<=1) return {};
@@ -755,7 +837,7 @@ namespace hcm {
   }
 
   
-  constexpr circuit parity_fast(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit parity_fast(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     // XOR/XNOR tree
     if (n<=1) return {};
@@ -776,12 +858,12 @@ namespace hcm {
   }
 
   
-  constexpr circuit parity(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit parity(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return parity_small(n,co,scale,bias);
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit decode1(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/)
   {
@@ -824,7 +906,7 @@ namespace hcm {
     return ((pdec[0]+(pdwire[0]*pno[0])) || (pdec[1]+(pdwire[1]*pno[1]))) + g * no;
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit decode2_rep(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/, u64 rep=1)
   {
@@ -844,7 +926,7 @@ namespace hcm {
     return ((pdec[0]+(pdwire[0]*pno[0])) || (pdec[1]+(pdwire[1]*pno[1]))) + g * (no*rep);
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX, u64 ARITY=4>
   constexpr auto mux_tree(u64 n/*inputs (data)*/, u64 m/*bits per input*/, f64 co)
   {
@@ -859,7 +941,7 @@ namespace hcm {
       assert(w>0);
       return (w==1)? inv{}.make(cload) : mux_inv_tri{w}.make(cload);
     };
-    
+
     auto selector = [m] (u64 w, u64 nmuxes) {
       assert(w>1);
       mux_inv_tri muxi{w};
@@ -1043,7 +1125,7 @@ namespace hcm {
 
 
   template<u64 N, circuit OP, u64 D>
-  inline constexpr circuit parallel_prefix = []() {
+  constexpr circuit parallel_prefix = []() {
     // OP = associative 2-input operation, each input is D bits, N = total inputs
     // TODO: wires
     // FIXME: switching activity depends on OP
@@ -1061,7 +1143,7 @@ namespace hcm {
   
 
   template<u64 N>
-  inline constexpr circuit priority_encoder = []() {
+  constexpr circuit priority_encoder = []() {
     // FIXME: not optimized
     static_assert(N!=0);
     if constexpr (N==1) {
@@ -1153,9 +1235,9 @@ namespace hcm {
     } 
     return (tree | bws) + (sum || carryout);
   }
-  
-  // ###########################
 
+
+  // ###########################
 
   template<u64 N>
   struct flipflops {
@@ -1169,7 +1251,7 @@ namespace hcm {
       circuit tri1 = t.make(cfeedback1);
       circuit tri2 = t.make(cfeedback2);
       circuit forward = tri1 + i.make(2*t.icap()) + tri2 + i.make(co);
-      circuit backward = tri1 || (i.make(t.icap()) + tri2);;
+      circuit backward = tri1 || (i.make(t.icap()) + tri2);
       return forward || backward;
     } ();
 
@@ -1180,7 +1262,7 @@ namespace hcm {
 
     static constexpr f64 width = SRAM_CELL.wordline_length * N; // um
     static constexpr f64 height = SRAM_CELL.bitline_length * (oneflop.t+clock1.t) / SRAM_CELL.transistors; // um
-    
+
     static constexpr circuit clocking = []() {
       f64 phicap2 = inv_tri{}.icap<2>() * 4;
       circuit clock2 = wire<4.>(width,false,(phicap2+clock1.ci)*N); // slave-latch clock
@@ -1188,7 +1270,6 @@ namespace hcm {
     } ();
 
     static constexpr u64 xtors = flops.t + clocking.t;
-    static constexpr u64 xtors_scaled = llround(flops.cg + clocking.cg);
 
     // clocking.e corresponds to a transition probability of 0.5
     // actually, the clock transitions with probability 1 twice per write
@@ -1201,8 +1282,7 @@ namespace hcm {
   template<typename T>
   struct sram_common {
     static constexpr u64 NBITS = T::num_bits();
-    static constexpr u64 XTORS = T::num_xtors(false);
-    static constexpr u64 XTORS_SCALED = T::num_xtors(true);
+    static constexpr u64 XTORS = T::num_xtors();
     static constexpr f64 LATENCY = T::read_latency(); // ps
     static constexpr f64 EREAD = T::read_energy(); // fJ
     static constexpr f64 EWRITE = T::write_energy(); // fJ
@@ -1228,7 +1308,7 @@ namespace hcm {
 
   struct sram_null {
     static constexpr u64 num_bits() {return 0;}
-    static constexpr u64 num_xtors(bool scaled) {return 0;}
+    static constexpr u64 num_xtors() {return 0;}
     static constexpr f64 read_latency() { return 0;}
     static constexpr f64 read_energy() {return 0;}
     static constexpr f64 write_energy() {return 0;}
@@ -1248,7 +1328,7 @@ namespace hcm {
     static constexpr circuit WBUS {};
   };
 
-  
+
   template<u64 N, u64 M, u64 D> requires (D<=M)
   struct sram_bank<N,M,D> : sram_common<sram_bank<N,M,D>> {
     // single R/W port, N wordlines, M cells per wordline
@@ -1289,7 +1369,7 @@ namespace hcm {
     static constexpr f64 SACAP_pF = SACAP * CGATE_pF;
     static constexpr f64 SASCALE = SACAP/SACAPMIN;
     static_assert(SASCALE>=1);
-    
+
     static constexpr f64 BLSWING = SAVBLMIN * sqrt(SACAPMAX/SACAP); // bitline voltage swing (V)
 
     // drive wordline from the mid point (Amrutur & Horowitz)
@@ -1384,17 +1464,8 @@ namespace hcm {
     static constexpr u64 num_bits() {return N * M;}
     static constexpr f64 array_width() {return sqrt(AREA*ASPECT_RATIO);} // um
     static constexpr f64 array_height() {return sqrt(AREA/ASPECT_RATIO);} // um
+    static constexpr u64 num_xtors() {return CELL_XTORS + PERI_XTORS;}
 
-    static constexpr u64 num_xtors(bool scaled)
-    {
-      if (scaled) {
-	// a scale-S transistor counts like S scale-1 transistors
-	return CELL_XTORS + llround(PERI_GATECAP);
-      } else {
-	return CELL_XTORS + PERI_XTORS;
-      }
-    }
-    
     static constexpr f64 read_latency()
     {
       return max(WLSEL.d + WLRC + BLDELAY + SADELAY, CMUX[0].d) + CMUX[1].d; // ps
@@ -1440,7 +1511,7 @@ namespace hcm {
     }
     
   };
-  
+
 
   template<u64 N, u64 M, u64 D> requires (D>M)
   struct sram_bank<N,M,D> : sram_common<sram_bank<N,M,D>> {
@@ -1466,16 +1537,8 @@ namespace hcm {
     static constexpr f64 write_energy() {return ABUS.e + BANK::EWRITE * NB + BANKR::EWRITE;}
     static constexpr f64 array_width() {return BANK::WIDTH * NB + BANKR::WIDTH;}
     static constexpr f64 array_height() {return BANK::HEIGHT;}
+    static constexpr u64 num_xtors() {return BANK::XTORS * NB + BANKR::XTORS + ABUS.t;}
 
-    static constexpr u64 num_xtors(bool scaled)
-    {
-      if (scaled) {
-	return BANK::XTORS_SCALED * NB + BANKR::XTORS_SCALED + ABUS.cg;
-      } else {
-	return BANK::XTORS * NB + BANKR::XTORS + ABUS.t;
-      }
-    }
-    
     static void print2(std::string s = "", std::ostream & os = std::cout)
     {
       os << s;
@@ -1543,18 +1606,14 @@ namespace hcm {
     static constexpr f64 array_width() {return BANK::WIDTH * BX;}
     static constexpr f64 array_height() {return BANK::HEIGHT * BY;}
 
-    static constexpr u64 num_xtors(bool scaled)
+    static constexpr u64 num_xtors()
     {
-      if (scaled) {
-	return NB * BANK::XTORS_SCALED + ACC.cg + WTREE.cg + RTREE[0].cg + RTREE[1].cg;
-      } else {
-	return NB * BANK::XTORS + ACC.t + WTREE.t + RTREE[0].t + RTREE[1].t;
-      }
+      return NB * BANK::XTORS + ACC.t + WTREE.t + RTREE[0].t + RTREE[1].t;
     }
   };
 
 
-  constexpr bool ok_config(u64 E/*entries*/, u64 D/*data bits*/, u64 MAXN, u64 MAXM)
+  inline constexpr bool ok_config(u64 E/*entries*/, u64 D/*data bits*/, u64 MAXN, u64 MAXM)
   {
     bool ok = E!=0 && D!=0; // mandatory
     ok = ok && std::has_single_bit(MAXN); // mandatory: MAXN must be a power of 2
@@ -1654,7 +1713,7 @@ namespace hcm {
     }
 
     static constexpr u64 num_bits() {return ARR::NBITS;}
-    static constexpr u64 num_xtors(bool scaled) {return (scaled)? ARR::XTORS_SCALED : ARR::XTORS;}
+    static constexpr u64 num_xtors() {return ARR::XTORS;}
     static constexpr f64 read_latency() {return ARR::LATENCY;}
     static constexpr f64 read_energy() {return ARR::EREAD;}
     static constexpr f64 write_energy() {return ARR::EWRITE;}
@@ -1717,13 +1776,13 @@ namespace hcm {
   
   template<u64 N>
   inline constexpr circuit AND = anding(N,OUTCAP);
-  
+
   template<u64 N>
   inline constexpr circuit OR = oring(N,OUTCAP);
 
   template<u64 N>
   inline constexpr circuit NAND = nanding(N,OUTCAP);
-  
+
   template<u64 N>
   inline constexpr circuit NOR = noring(N,OUTCAP);
 
@@ -1750,8 +1809,21 @@ namespace hcm {
 
   template<u64 N, u64 WIDTH> requires (N>=2)
   inline constexpr auto MUX = mux(N,WIDTH,OUTCAP);
-  
-  
+
+  // circuit for replicating a value M times
+  template<u64 DATABITS, u64 COPIES>
+  inline constexpr circuit REP = []() {
+    // wires not modeled (TODO)
+    circuit tree = broadcast_tree(COPIES);
+    if (tree.ci > INVCAP) {
+      // composing replication must not allow to build a large replicator at no hardware cost,
+      // so we charge a hardware cost corresponding to that of an inverter
+      tree = inv{}.make(tree.ci) + tree;
+    }
+    return tree * DATABITS;
+  }();
+
+
   // ###########################
 
   template<typename T>
@@ -1767,7 +1839,7 @@ namespace hcm {
     using U = std::remove_reference_t<T>;
     using type = val<U::size,typename U::type>;
   };
-  
+
   template<typename T>
   using toval = toval_impl<T>::type;
 
@@ -1847,10 +1919,11 @@ namespace hcm {
   template<action A>
   using return_type = action_return<A>::type;
   
-  
-  // ###########################
 
-  class exec_control {
+  // ###########################
+  // GLOBAL VARIABLES
+
+  inline class exec_control {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class globals;
@@ -1867,13 +1940,12 @@ namespace hcm {
     exec_control() : active(true), time(0) {}
   } exec;
 
-  
-  // ###########################
-  
+
   template<arith T>
   class global {
     friend class globals;
     friend class ::simulator;
+    template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<memdatatype,u64> friend class ram;
   private:
@@ -1883,11 +1955,11 @@ namespace hcm {
     global& operator= (const global& x) = default;
     void operator+= (T i) {data+=i;}
     void operator++(int) {data++;}
-    operator T() const {return data;}
     void operator&() = delete;
   public:
     global(T x) : data(x) {}
-    
+    operator T() const {return data;}
+
     void print(std::string s = "", std::ostream & os = std::cout) const
     {
       os << s << data << std::endl;
@@ -1895,22 +1967,24 @@ namespace hcm {
   };
 
 
-  class globals {
+  inline class globals {
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
     friend class ::simulator;
-  public:
     static constexpr u64 first_cycle = 1;
+  public:
     global<u64> clock_cycle_ps = 300;
     global<u64> cycle = first_cycle;
     global<u64> storage;
     global<f64> energy_fJ;
     global<u64> transistors_storage;
     global<u64> transistors_logic[2];
+
   private:
+    global<bool> storage_destroyed = false;
 
     void next_cycle()
     {
@@ -1933,7 +2007,7 @@ namespace hcm {
 
     void update_logic(const circuit &c)
     {
-      transistors_logic[0] += c.cg; // an N-fin transistor counts like N single-fin transistors
+      transistors_logic[0] += c.t;
       update_energy(c.e);
     }
 
@@ -1970,7 +2044,7 @@ namespace hcm {
   
   // ###########################
 
-  
+
   template<u64 N, arith T = u64>
   class val {
     //static_assert(N!=0);
@@ -1979,57 +2053,114 @@ namespace hcm {
 
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
-    template<u64,u64> friend class valpair;
+    template<u64,u64> friend class split;
     template<valtype, u64> friend class arr;
     template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     friend class proxy;
     friend class ::simulator;
-    
+
   private:
     T data = 0;
     u64 timing = 0; // time
+    u64 read_credit = 1;
 
-    val() {};
-    
-    T fit(T x) requires std::integral<T>
+    T fit(T x) const requires std::integral<T>
     {
       return truncate<N>(x);
     }
-    
-    T get()
-    {
-      return data;
-    }
 
-    T get() requires std::signed_integral<T>
+    T sign_extended() const
     {
       if constexpr (N < bitwidth<T>) {
 	assert((std::make_unsigned_t<T>(data) >> N) == 0);
       }
-      T signbit = T(1) << (N-1);
+      constexpr T signbit = T(1) << (N-1);
       return (data ^ signbit) - signbit;
     }
 
-    u64 time() const {return max(exec.time,timing);}
+    void set_time(u64 t)
+    {
+      timing = t;
+    }
 
-    void set_time(u64 t) {timing = t;}
+    void read()
+    {
+      // simulation speed is impacted by this function
+#ifndef FREE_FANOUT
+      if (read_credit!=0) {
+	read_credit--;
+      } else {
+#ifdef CHECK_FANOUT
+	assert(("fanout exhausted",read_credit!=0));
+#else
+	// fanout exhausted: now delay increases linearly with the number of reads
+	// delay increment is that of a FO2 inverter (wires not modeled, TODO?)	
+	constexpr circuit fo2inv = inv{}.make(2*INVCAP) * N; // N inverters in parallel
+	panel.update_logic(fo2inv);
+	set_time(time()+fo2inv.delay());
+#endif
+      }
+#endif
+    }
+
+    T get() & // lvalue
+    {
+      read();
+      return data;
+    }
+
+    T get() const && // rvalue
+    {
+      return data;
+    }
+
+    T get() & requires std::signed_integral<T> // lvalue
+    {
+      read();
+      return sign_extended();
+    }
+
+    T get() const && requires std::signed_integral<T> // rvalue
+    {
+      return sign_extended();
+    }
+
+    auto get_vt() & // lvalue
+    {
+      return std::tuple {get(),time()};
+    }
+
+    auto get_vt() const && // rvalue
+    {
+      return std::tuple {std::move(*this).get(),time()};
+    }    
 
     void operator= (val & x)
     {
-      if (! exec.active) return;
-      data = x.get();
-      timing = x.time();
+      auto [xv,xt] = x.get_vt();
+      if (exec.active) data = xv;
+      set_time(xt);
     }
 
-    void operator= (val && x) {operator=(x);}
+    void operator= (const val && x)
+    {
+      auto [xv,xt] = std::move(x).get_vt();
+      if (exec.active) data = xv;
+      set_time(xt);
+    }
 
     void operator&() = delete;
 
   public:
-    
+
     static constexpr u64 size = N;
     using type = T;
+
+    u64 time() const
+    {
+      return max(exec.time,timing);
+    }
 
     static constexpr T maxval = []() {
       if constexpr (N == bitwidth<T>) {
@@ -2057,7 +2188,13 @@ namespace hcm {
 	  return -(T(1)<<(N-1));
 	}
       } 
-    }();    
+    }();
+
+    val() {}
+
+    val(val &x) : val(x.get(),x.time()) {}
+
+    val(const val &&x) : val(std::move(x).get(),x.time()) {}
 
     val(std::integral auto x, u64 t=0) requires std::integral<T> : data(fit(x))
     {
@@ -2068,26 +2205,41 @@ namespace hcm {
     {
       set_time(t);
     }
-    
+
     val(std::floating_point auto x, u64 t=0) : data(x)
     {
       static_assert(N == bitwidth<T>);
       set_time(t);
     }
 
-    val(val &x) : val(x.get(),x.time()) {}
-    val(val &&x) : val(x) {}
-    val(valtype auto &&x) requires std::unsigned_integral<T> : val(to_unsigned(x.get()),x.time()) {}
-    val(valtype auto &&x) : val(x.get(),x.time()) {}
-    
+    template<valtype U> requires std::unsigned_integral<T>
+    val(U &&x) : val(to_unsigned(std::forward<U>(x).get()),std::forward<U>(x).time()) {}
+
+    template<valtype U>
+    val(U &&x) : val(std::forward<U>(x).get(),std::forward<U>(x).time()) {}
+
+    template<u64 FO>
+    void fanout(hard<FO>) & // lvalue
+    {
+#ifndef FREE_FANOUT
+      if constexpr (FO<2) return;
+      // delay logarithmic with fanout (wires not modeled, TODO?)
+      panel.update_logic(REP<N,FO>);
+      set_time(time()+REP<N,FO>.delay());
+      read_credit = FO;
+#endif
+    }
+
+    void fanout(auto) && = delete; // rvalue, not needed
+
     void print(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
       os << before << +data;
       if (t)
-	os << " (t=" << time() << ")";
+	os << " (t=" << time() << " ps)";
       os << after << std::flush;
     }
-    
+
     void printb(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
       os << before;
@@ -2099,50 +2251,109 @@ namespace hcm {
 	os << std::bitset<N>(std::bit_cast<u64>(data));
       }
       if (t)
-	os << " (t=" << time() << ")";
+	os << " (t=" << time() << " ps)";
       os << after << std::flush;
     }
 
-    val<1> operator[] (u64 i) requires std::unsigned_integral<T>
+    template<u64 W>
+    auto make_array(val<W>&&) & // lvalue
     {
-      // no transistors
-      // only for reading a bit, not for writing
-      assert(i<N);
-      return {(get() >> i) & 1, time()};
+      static_assert(N!=0);
+      static_assert(std::unsigned_integral<T>);
+      static_assert(W!=0 && W<=64);
+      constexpr u64 mask = (W==64)? -1 : (u64(1)<<W)-1;
+      constexpr u64 M = (N+W-1)/W;
+      auto [x,t] = get_vt();
+      arr<val<W>,M> out;
+      for (u64 i=0; i<M; i++) {
+	out[i] = val<W>{x&mask,t};
+	x >>= W;
+      }
+      return out;
     }
-    
-    [[nodiscard]] val reverse() requires std::unsigned_integral<T>
+
+    template<u64 W>
+    auto make_array(val<W>&&) const && // rvalue
+    {
+      static_assert(N!=0);
+      static_assert(std::unsigned_integral<T>);
+      static_assert(W!=0 && W<=64);
+      constexpr u64 mask = (W==64)? -1 : (u64(1)<<W)-1;
+      constexpr u64 M = (N+W-1)/W;
+      auto [x,t] = std::move(*this).get_vt();
+      arr<val<W>,M> out;
+      for (u64 i=0; i<M; i++) {
+	out[i] = val<W>{x&mask,t};
+	x >>= W;
+      }
+      return out;
+    }
+
+    [[nodiscard]] val reverse() & requires std::unsigned_integral<T> // lvalue
     {
       // no transistors
       return {reverse_bits(get()) >> (bitwidth<T>-N), time()};
     }
 
-    auto ones()
+    [[nodiscard]] val reverse() const && requires std::unsigned_integral<T> // rvalue
+    {
+      // no transistors
+      return {reverse_bits(std::move(*this).get()) >> (bitwidth<T>-N), time()};
+    }
+
+    auto ones() & // lvalue
     {
       // TODO: transistors & time
-      auto n = std::popcount(truncate<N>(get()));
+      auto [x,t] = get_vt();
+      auto n = std::popcount(truncate<N>(x));
       return val<std::bit_width(N)> {n};
     }
 
-    [[nodiscard]] val priority_encode() requires std::unsigned_integral<T>
+    auto ones() const && // rvalue
     {
-      constexpr circuit c = priority_encoder<N>;
-      u64 x = get();
+      // TODO: transistors & time
+      auto [x,t] = std::move(*this).get_vt();
+      auto n = std::popcount(truncate<N>(x));
+      return val<std::bit_width(N)> {n};
+    }
+
+    [[nodiscard]] val priority_encode() & requires std::unsigned_integral<T> // lvalue
+    {
+      static constexpr circuit c = priority_encoder<N>;
+      auto [x,t] = get_vt();
       u64 y = x & (x^(x-1));
       panel.update_logic(c);
-      return {y,time()+c.delay()};
+      return {y,t+c.delay()};
+    }
+
+    [[nodiscard]] val priority_encode() const && requires std::unsigned_integral<T> // rvalue
+    {
+      static constexpr circuit c = priority_encoder<N>;
+      auto [x,t] = std::move(*this).get_vt();
+      u64 y = x & (x^(x-1));
+      panel.update_logic(c);
+      return {y,t+c.delay()};
     }
 
     template<u64 M>
-    auto make_array()
+    arr<val,M> replicate(hard<M>) & // lvalue
     {
-      // broadcast (TODO: wires)
-      arr<valt<val>,M> a;
-      for (u64 i=0; i<M; i++) {
-	a[i] = *this;
-      }
+      // only the user knows the fanout (>=M) and can set it
+      arr<val,M> a;
+      for (u64 i=0; i<M; i++) a[i] = *this;
       return a;
     }
+
+    template<u64 M>
+    arr<val,M> replicate(hard<M>) && // rvalue
+    {
+      // the user cannot set the fanout, but the fanout is known
+      fanout(hard<M>{});
+      arr<val,M> a;
+      for (u64 i=0; i<M; i++) a[i] = std::move(*this);
+      return a;
+    }
+
   };
 
 
@@ -2152,32 +2363,72 @@ namespace hcm {
   private:
     proxy() = delete;
     ~proxy() = delete;
-    static auto get(const arith auto& x) {return x;}
-    static auto get(valtype auto& x) {return x.get();}
-    static auto get(arrtype auto& x) {return x.get();}
-    static u64 time(const auto& x) {return 0;}
-    static u64 time(const valtype auto& x) {return x.time();}
-    static u64 time(const arrtype auto& x) {return x.time();}
 
-    static void set_time(valtype auto& x, arith auto t) {x.set_time(t);}
-    static void update_logic(const circuit &c) {panel.update_logic(c);}
-    
+    template<typename T>
+    static auto get(T &&x)
+    {
+      if constexpr (valtype<T> || arrtype<T>) {
+	return std::forward<T>(x).get();
+      } else {
+	static_assert(arith<std::remove_reference_t<T>>);
+	return x;
+      }
+    }
+
+    template<typename T>
+    static u64 time(T &&x)
+    {
+      if constexpr (valtype<T> || arrtype<T>) {
+	return std::forward<T>(x).time();
+      } else {
+	static_assert(arith<std::remove_reference_t<T>>);
+	return 0;
+      }
+    }
+
+    template<typename T>
+    static auto get_vt(T &&x)
+    {
+      if constexpr (valtype<T>) {
+	return std::forward<T>(x).get_vt();
+      } else {
+	using atype = std::remove_reference_t<T>;
+	static_assert(arith<atype>);
+	return std::tuple<atype,u64>{x,0};
+      }
+    }
+
+    template<typename T>
+    static void set_time(T &&x, u64 t)
+    {
+      static_assert(valtype<T> || arrtype<T>);
+      std::forward<T>(x).set_time(t);
+    }
+
+    static void update_logic(const circuit &c)
+    {
+      panel.update_logic(c);
+    }
+
     template<valtype T1, valtype T2>
-    static auto concatenate(T1&& x1, T2&& x2)
+    static auto concat2(T1 &&x1, T2 &&x2)
     {
       static_assert(std::unsigned_integral<base<T1>>);
       static_assert(std::unsigned_integral<base<T2>>);
       using rtype = val<x1.size+x2.size>;
       if constexpr (x1.size == 0) {
-	return rtype {get(x2)};
+	auto [v2,t2] = std::forward<T2>(x2).get_vt();
+	return rtype {v2,t2};
       } else {
-	return rtype {(get(x1) << x2.size) | get(x2)};
+	auto [v1,t1] = std::forward<T1>(x1).get_vt();
+	auto [v2,t2] = std::forward<T2>(x2).get_vt();
+	return rtype {(v1 << x2.size) | v2, max(t1,t2)};
       }
     }
-    
+
     template<u64,arith> friend class reg;
     template<valtype,u64> friend class arr;
-    template<u64,u64> friend class valpair;
+    template<u64,u64> friend class split;
     template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
     
@@ -2216,7 +2467,7 @@ namespace hcm {
 
     template<valtype T1, arith T2>
     friend val<1> operator<= (T1&&, T2);
-    
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend valt<T1,T2> operator+ (T1&&, T2&&);
 
@@ -2303,23 +2554,25 @@ namespace hcm {
   // ###########################
 
   template<u64 L, u64 R>
-  class valpair {
+  class split {
   public:
     val<L> left;
     val<R> right;
 
-    valpair(ival auto && x)
+    template<valtype T>
+    split(T && x)
     {
-      auto t = proxy::time(x);
-      auto data = proxy::get(x);
+      static_assert(x.size == L+R);
+      auto [data,t] = std::forward<T>(x).get_vt();
       right = {data,t};
-      left = {data>>R,t};
+      if constexpr (R<64) {
+	left = {data>>R,t};
+      }
     }
   };
-  
-  // ###########################
 
-  inline global<bool> storage_destroyed = false;
+
+  // ###########################
 
 
   template<u64 N, arith T = u64>
@@ -2332,37 +2585,41 @@ namespace hcm {
 
     void create()
     {
-      assert(("all storage (reg,ram) must have the same lifetime",!storage_destroyed));
-      panel.update_storage(N,stg::xtors_scaled);
+      assert(("all storage (reg,ram) must have the same lifetime",!panel.storage_destroyed));
+      panel.update_storage(N,stg::xtors);
     }
 
   public:
 
-    reg() : val<N,T>() {create();}
-
-    reg(const std::convertible_to<T> auto &x) : val<N,T>(x) {create();}
-
-    template<u64 M, arith U>
-    reg(val<M,U> &x) : val<N,T>(x) {create();}
-
-    reg(reg &other)
+    reg()
     {
-      val<N,T>::operator=(other);
+      create();
+    }
+
+    reg(reg &other) : val<N,T>{other}
+    {
       create();
     }
 
     reg(reg &&) = delete;
-    
+
+    template<std::convertible_to<val<N,T>> U>
+    reg(U &&x) : val<N,T>{std::forward<U>(x)}
+    {
+      create();
+    }    
+
     ~reg()
     {
-      storage_destroyed = true;
+      panel.storage_destroyed = true;
     }
 
-    void assign(auto & other)
+    template<typename U>
+    void assign(U &&other)
     {
       assert(("single register write per cycle",panel.cycle>last_write_cycle));
       last_write_cycle = panel.cycle;     
-      val<N,T>::operator=(other);
+      val<N,T>::operator=(std::forward<U>(other));
       panel.update_energy(stg::write_energy_fJ);
     }
 
@@ -2371,12 +2628,14 @@ namespace hcm {
       assign(other);
     }
 
-    void operator= (reg && other) = delete;
+    void operator= (reg &&) = delete;
 
-    void operator= (auto && other)
+    template<typename U>
+    void operator= (U &&other)
     {
-      assign(other);
+      assign(std::forward<U>(other));
     }
+
   };
 
 
@@ -2385,205 +2644,490 @@ namespace hcm {
   template<typename T, typename X, typename Y>
   concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
 
-  
+
   template<valtype T, u64 N>
   class arr {
     template<valtype,u64> friend class arr;
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
+  public:
+    static constexpr u64 size = N;
+    using type = T;
+    using atype = T::type;
+
   private:
 
-    std::array<T,N> a {};
+    std::array<T,N> elem {};
 
     template<arrtype U>
     void copy_from(U &&other)
     {
       static_assert(other.size == N);
-      for (u64 i=0; i<N; i++) a[i] = other.a[i];
+      if constexpr (std::is_rvalue_reference_v<decltype(other)>) {
+	for (u64 i=0; i<N; i++) elem[i] = std::move(other.elem[i]);
+      } else {
+	for (u64 i=0; i<N; i++) elem[i] = other.elem[i];
+      }
     }
 
-    void operator= (arr &other) {copy_from(other);}
-    void operator= (arr &&other) {copy_from(other);}
-    
-    void operator&() = delete;
-
-    auto get()
+    void operator= (arr &other)
     {
-      std::array<typename T::type,N> b;
-      for (int i=0; i<N; i++) b[i] = a[i].get();
+      copy_from(other);
+    }
+
+    void operator= (const arr &&other)
+    {
+      copy_from(std::move(other));
+    }
+
+    void operator& () = delete;
+
+    auto get() & // lvalue
+    {
+      std::array<atype,N> b;
+      for (int i=0; i<N; i++) b[i] = elem[i].get();
       return b;
     }
-    
+
+    auto get() const && // rvalue
+    {
+      std::array<atype,N> b;
+      for (int i=0; i<N; i++) b[i] = std::move(elem[i]).get();
+      return b;
+    }
+
+    void set_time(u64 t)
+    {
+      for (u64 i=0; i<N; i++) elem[i].set_time(t);
+    }
+
+  public:
+
     u64 time() const
     {
       u64 t = 0;
       for (u64 i=0; i<N; i++) {
-	t = max(t,a[i].time());
+	t = max(t,elem[i].time());
       }
       return t;
     }
-    
-    void set_time(u64 t)
-    {
-      for (u64 i=0; i<N; i++) a[i].set_time(t);
-    }
-    
-  public:
-
-    static constexpr u64 size = N;
-    using type = T;
 
     arr() {}
-    
+
+    arr(arr &other)
+    {
+      copy_from(other);
+    }
+
+    arr(const arr &&other)
+    {
+      copy_from(std::move(other));
+    }
+
     template<std::convertible_to<T> ...U>
-    arr(U... args) : a{args...} {}
-    
+    arr(U&&... args) : elem{std::forward<U>(args)...} {}
+
     arr(unaryfunc<u64,T> auto f)
     {
       for (u64 i=0; i<N; i++) {
-	a[i] = f(i);
+	elem[i] = f(i);
       }
     }
 
     template<std::convertible_to<T> U>
-    arr(const std::array<U,N> &b)
+    arr(std::array<U,N> &b, u64 t=0)
     {
       for (u64 i=0; i<N; i++) {
-	a[i] = b[i];
+	elem[i] = {b[i],t};
       }
     }
 
     template<std::convertible_to<T> U>
-    arr(const U (&b)[N])
+    arr(U (&b)[N], u64 t=0)
     {
       for (u64 i=0; i<N; i++) {
-	a[i] = b[i];
+	elem[i] = {b[i],t};
       }
     }
 
-    arr(arr &other) {copy_from(other);} 
-    arr(arr &&other) : arr(other) {}
-    arr(arrtype auto &&other) {copy_from(other);}
-    
+    template<arrtype U>
+    arr(U &&other)
+    {
+      copy_from(std::forward<U>(other));
+    }
+
     void operator= (arr &other) requires (regtype<T>)
     {
       copy_from(other);
     }
 
-    void operator= (arr &&other) requires (regtype<T>)
+    void operator= (const arr &&other) requires (regtype<T>)
     {
-      copy_from(other);
+      copy_from(std::move(other));
     }
 
     template<arrtype U> requires (regtype<T>)
     void operator= (U &&other)
     {
-      copy_from(other);
+      copy_from(std::forward<U>(other));
     }
 
-    T get(u64 i)
+    T& operator[] (u64 i)
     {
       assert(i<N);
-      return a[i].get();
+      return elem[i];
     }
-    
-    T& operator [] (u64 i)
+
+    template<valtype U>
+    [[nodiscard]] valt<T> select(U && index)
     {
-      assert(i<N);
-      return a[i];
+      // only for reading
+      // we do not bother providing an rvalue version
+      static_assert(ival<U>);
+      static_assert(N>=1);
+      if constexpr (N>=2) {
+	constexpr auto c = MUX<N,T::size>;
+	panel.update_logic(c[0]); // MUX select
+	panel.update_logic(c[1]); // MUX data
+	auto [i,ti] = std::forward<U>(index).get_vt();
+	assert(i<N);
+	auto [d,td] = elem[i].get_vt(); // lvalue
+	auto t = max(ti+c[0].delay(),td) + c[1].delay();
+	return {d,t};
+      } else {
+	static_assert(N==1);
+	return elem[0];
+      }
     }
+
+    template<u64 FO>
+    void fanout(hard<FO>) & // lvalue
+    {
+      for (auto &e : elem) e.fanout(hard<FO>{});
+    }
+
+    void fanout(auto) && = delete; // rvalue, not needed
 
     void print(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
-      for (u64 i=0; i<N; i++) a[i].print(before+std::to_string(i)+": ",after,t,os);
+      for (u64 i=0; i<N; i++) elem[i].print(before+std::to_string(i)+": ",after,t,os);
     }
 
     void printb(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
-      for (u64 i=0; i<N; i++) a[i].printb(before+std::to_string(i)+": ",after,t,os);
+      for (u64 i=0; i<N; i++) elem[i].printb(before+std::to_string(i)+": ",after,t,os);
     }
 
-    auto concat() requires std::unsigned_integral<typename T::type>
+    auto concat() & requires std::unsigned_integral<atype> // lvalue
     {
       // element 0 is at rightmost position
-      // no transistors (TODO: wires)
       static_assert(N!=0);
       u64 y = 0;
       for (i64 i=N-1; i>=0; i--) {
-	y = (y<<T::size) | a[i].get();
+	y = (y<<T::size) | elem[i].get();
       }
       return val<N*T::size> {y,time()};
     }
 
-    [[nodiscard]] auto append(std::convertible_to<valt<T>> auto && x)
+    auto concat() const && requires std::unsigned_integral<atype> // rvalue
     {
-      // no transistors
+      // element 0 is at rightmost position
+      static_assert(N!=0);
+      u64 y = 0;
+      for (i64 i=N-1; i>=0; i--) {
+	y = (y<<T::size) | std::move(elem[i]).get();
+      }
+      return val<N*T::size> {y,time()};
+    }
+
+    template<std::convertible_to<valt<T>> U>
+    [[nodiscard]] auto append(U &&x) & // lvalue
+    {
       arr<valt<T>,N+1> b;
-      for (int i=0; i<N; i++) {
-	b[i] = a[i];
+      for (u64 i=0; i<N; i++) {
+	b[i] = elem[i];
       }
-      b[N] = std::forward<decltype(x)>(x);
+      b[N] = std::forward<U>(x);
       return b;
     }
-    
-    template<u64 M>
-    val<M> extract(u64 pos) requires std::unsigned_integral<typename T::type>
+
+    template<std::convertible_to<valt<T>> U>
+    [[nodiscard]] auto append(U &&x) const && // rvalue
     {
-      // no transistors
-      static_assert(M!=0);
-      if (pos >= T::size*N)
-	return 0;
-      int i = pos / T::size;
-      int j = pos % T::size;
-      u64 x = a[i].get() >> j;
-      auto t = a[i].time();
-      u64 nbits = T::size - j;
-      i++;
-      while (nbits<M && i<N) {
-	x |= a[i].get() << nbits;
-	t = max(t,a[i].time());
-	nbits += T::size;
-	i++;
+      arr<valt<T>,N+1> b;
+      for (u64 i=0; i<N; i++) {
+	b[i] = std::move(elem[i]);
       }
-      return {x,t};
+      b[N] = std::forward<U>(x);
+      return b;
     }
 
-    template<u64 W, u64 NBITS>
-    auto make_array() requires std::unsigned_integral<typename T::type>
+    template<u64 W>
+    [[nodiscard]] auto make_array(val<W>&&) & // lvalue
     {
-      // no transistors
-      static_assert(W!=0 && NBITS!=0);
-      constexpr u64 L = (NBITS+W-1)/W;
-      static_assert(L!=0);
-      arr<val<W>,L> b;
-      for (int i=0; i<L; i++) {
-	b[i] = extract<W>(i*W);
-      }
-      if constexpr (constexpr u64 R = NBITS % W; R != 0) {
-	b[L-1] = b[L-1].get() % (1ull<<R);
-      }
-      return b;
-    }   
+      static_assert(std::unsigned_integral<atype>);
+      static_assert(W!=0 && W<=64);
+      constexpr u64 NBITS = T::size*N;
+      constexpr u64 M = (NBITS+W-1)/W;
+      const auto data = get();
+      const auto t = time(); // FIXME?
+      auto a = pack_bits<T::size>(data);
+      auto aa = unpack_bits<W>(a);
+      static_assert(aa.size()>=M);
+      return arr<val<W>,M> {aa,t};
+    }
 
-    valt<T> xor_all()
+    template<u64 W>
+    [[nodiscard]] auto make_array(val<W>&&) const && // rvalue
+    {
+      static_assert(std::unsigned_integral<atype>);
+      static_assert(W!=0 && W<=64);
+      constexpr u64 NBITS = T::size*N;
+      constexpr u64 M = (NBITS+W-1)/W;
+      const auto data = std::move(*this).get();
+      const auto t = time(); // FIXME?
+      auto a = pack_bits<T::size>(data);
+      auto aa = unpack_bits<W>(a);
+      static_assert(aa.size()>=M);
+      return arr<val<W>,M> {aa,t};
+    }
+
+    template<valtype U>
+    [[nodiscard]] auto shift_left(U && x) & // lvalue
+    {
+      static_assert(std::unsigned_integral<atype>);
+      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(N!=0);
+      static_assert(U::size!=0);
+      const auto data = get();
+      const auto t = time(); // FIXME?
+      auto a = pack_bits<T::size>(data);
+      if constexpr (U::size == 64) {
+	for (u64 i=a.size(); i!=0; i--) a[i] = a[i]-1;
+	a[0] = std::forward<U>(x).get();
+      } else {
+	static_assert(U::size<64);
+	for (u64 i=a.size()-1; i!=0; i--) {
+	  a[i] = (a[i] << U::size) | (a[i-1] >> (64-U::size));
+	}
+	a[0] = (a[0] << U::size) | (std::forward<U>(x).get() & ((u64(1)<<U::size)-1));
+      }
+      auto aa = unpack_bits<T::size>(a);
+      static_assert(aa.size()>=N);
+      arr<valt<T>,N> out;
+      for (u64 i=0; i<N; i++) {
+	out[i] = {aa[i],t};
+      }
+      return out;
+    }
+
+    template<valtype U>
+    [[nodiscard]] auto shift_left(U && x) const && // rvalue
+    {
+      static_assert(std::unsigned_integral<atype>);
+      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(N!=0);
+      static_assert(U::size!=0);
+      const auto data = std::move(*this).get();
+      const auto t = time(); // FIXME?
+      auto a = pack_bits<T::size>(data);
+      if constexpr (U::size == 64) {
+	for (u64 i=a.size(); i!=0; i--) a[i] = a[i]-1;
+	a[0] = std::forward<U>(x).get();
+      } else {
+	static_assert(U::size<64);
+	for (u64 i=a.size()-1; i!=0; i--) {
+	  a[i] = (a[i] << U::size) | (a[i-1] >> (64-U::size));
+	}
+	a[0] = (a[0] << U::size) | (std::forward<U>(x).get() & ((u64(1)<<U::size)-1));
+      }
+      auto aa = unpack_bits<T::size>(a);
+      static_assert(aa.size()>=N);
+      arr<valt<T>,N> out;
+      for (u64 i=0; i<N; i++) {
+	out[i] = {aa[i],t};
+      }
+      return out;
+    }
+
+    template<valtype U>
+    [[nodiscard]] auto shift_right(U && x) & // lvalue
+    {
+      static_assert(std::unsigned_integral<atype>);
+      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(N!=0);
+      static_assert(U::size!=0);
+      const auto data = get();
+      const auto t = time(); // FIXME?
+      auto a = pack_bits<T::size>(data);
+      if constexpr (U::size == 64) {
+	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i]+1;
+	a[a.size()-1] = 0;
+      } else {
+	static_assert(U::size<64);
+	for (u64 i=0; i<a.size()-1; i++) {
+	  a[i] = (a[i] >> U::size) | (a[i+1] << (64-U::size));
+	}
+	a[a.size()-1] >>= U::size;
+      }
+      auto xdata = std::forward<U>(x).get();
+      u64 shiftin = (U::size==64)? xdata : xdata & ((u64(1)<<U::size)-1);
+      u64 k = T::size*N - U::size;
+      u64 j = k/64;
+      u64 pos = k%64;
+      a[j] |= shiftin << pos;
+      if (pos+U::size > 64) {
+	a[j+1] = shiftin >> (64-pos);
+      }
+      auto aa = unpack_bits<T::size>(a);
+      static_assert(aa.size()>=N);
+      arr<valt<T>,N> out;
+      for (u64 i=0; i<N; i++) {
+	out[i] = {aa[i],t};
+      }
+      return out;
+    }
+
+    template<valtype U>
+    [[nodiscard]] auto shift_right(U && x) const && // rvalue
+    {
+      static_assert(std::unsigned_integral<atype>);
+      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(N!=0);
+      static_assert(U::size!=0);
+      const auto data = std::move(*this).get();
+      const auto t = time(); // FIXME?
+      auto a = pack_bits<T::size>(data);
+      if constexpr (U::size == 64) {
+	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i]+1;
+	a[a.size()-1] = 0;
+      } else {
+	static_assert(U::size<64);
+	for (u64 i=0; i<a.size()-1; i++) {
+	  a[i] = (a[i] >> U::size) | (a[i+1] << (64-U::size));
+	}
+	a[a.size()-1] >>= U::size;
+      }
+      auto xdata = std::forward<U>(x).get();
+      u64 shiftin = (U::size==64)? xdata : xdata & ((u64(1)<<U::size)-1);
+      u64 k = T::size*N - U::size;
+      u64 j = k/64;
+      u64 pos = k%64;
+      a[j] |= shiftin << pos;
+      if (pos+U::size > 64) {
+	a[j+1] = shiftin >> (64-pos);
+      }
+      auto aa = unpack_bits<T::size>(a);
+      static_assert(aa.size()>=N);
+      arr<valt<T>,N> out;
+      for (u64 i=0; i<N; i++) {
+	out[i] = {aa[i],t};
+      }
+      return out;
+    }
+
+    valt<T> fold_xor() & // lvalue
     {
       if constexpr (N>=2) {
-	static constexpr circuit c = XOR<N> * T::size;
+	constexpr circuit c = XOR<N> * T::size;
 	panel.update_logic(c);
-	auto x = a[0].get();
-	for (int i=1; i<N; i++) {
-	  x ^= a[i].get();
-	}
-	u64 t = time() + c.delay();
+	const auto data = get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x ^= e;
 	return {x,t};
       } else if constexpr (N==1) {
-	// no transistors
-	return a[0];
+	return elem[0];
       } else {
 	return 0;
       }
     }
+
+    valt<T> fold_xor() const && // rvalue
+    {
+      if constexpr (N>=2) {
+	constexpr circuit c = XOR<N> * T::size;
+	panel.update_logic(c);
+	const auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x ^= e;
+	return {x,t};
+      } else if constexpr (N==1) {
+	return std::move(elem[0]);
+      } else {
+	return 0;
+      }
+    }
+    
+    valt<T> fold_or() & // lvalue
+    {
+      if constexpr (N>=2) {
+	constexpr circuit c = OR<N> * T::size;
+	panel.update_logic(c);
+	const auto data = get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x |= e;
+	return {x,t};
+      } else if constexpr (N==1) {
+	return elem[0];
+      } else {
+	return 0;
+      }
+    }
+
+    valt<T> fold_or() const && // rvalue
+    {
+      if constexpr (N>=2) {
+	constexpr circuit c = OR<N> * T::size;
+	panel.update_logic(c);
+	const auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x |= e;
+	return {x,t};
+      } else if constexpr (N==1) {
+	return std::move(elem[0]);
+      } else {
+	return 0;
+      }
+    }    
+
+    valt<T> fold_and() & // lvalue
+    {
+      if constexpr (N>=2) {
+	constexpr circuit c = AND<N> * T::size;
+	panel.update_logic(c);
+	const auto data = get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x &= e;
+	return {x,t};
+      } else if constexpr (N==1) {
+	return elem[0];
+      } else {
+	return 0;
+      }
+    }
+
+    valt<T> fold_and() const && // rvalue
+    {
+      if constexpr (N>=2) {
+	constexpr circuit c = AND<N> * T::size;
+	panel.update_logic(c);
+	const auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x &= e;
+	return {x,t};
+      } else if constexpr (N==1) {
+	return std::move(elem[0]);
+      } else {
+	return 0;
+      }
+    }    
   };
 
 
@@ -2621,7 +3165,7 @@ namespace hcm {
       u64 addr{};
       valuetype dataval{};
       u64 t{};
-      
+
       bool operator< (const writeop &rhs) {return t > rhs.t;}
 
       void commit(ram &mem) const
@@ -2630,7 +3174,7 @@ namespace hcm {
 	mem.data[addr] = dataval;
       }
     };
-    
+
     std::vector<writeop> writes; // pending writes
 
     ram(ram &) = delete;
@@ -2641,12 +3185,12 @@ namespace hcm {
 
     ram()
     {
-      panel.update_storage(static_ram::NBITS,static_ram::XTORS_SCALED);
+      panel.update_storage(static_ram::NBITS,static_ram::XTORS);
     }
 
     ~ram()
     {
-      storage_destroyed = true;
+      panel.storage_destroyed = true;
       while (! writes.empty()) {
 	writes[0].commit(*this);
 	std::pop_heap(writes.begin(),writes.end());
@@ -2654,37 +3198,40 @@ namespace hcm {
       }
     }
 
-    void write(ival auto && address, std::convertible_to<T> auto && dataval)
+    template<ival TYPEA, std::convertible_to<T> TYPED>
+    void write(TYPEA && address, TYPED && dataval)
     {
       assert(("single RAM write per cycle",panel.cycle>last_write_cycle));
       last_write_cycle = panel.cycle;
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
-      u64 t = max(proxy::time(address),proxy::time(dataval)); // TODO: write latency?
-      writes.push_back({u64(proxy::get(address)),valuetype(proxy::get(dataval)),t});
+      auto [av,at] = proxy::get_vt(std::forward<TYPEA>(address));
+      auto dv = proxy::get(std::forward<TYPED>(dataval));
+      auto dt = proxy::time(dataval);
+      writes.push_back({u64(av),valuetype(dv),max(at,dt)});
       std::push_heap(writes.begin(),writes.end());
     }
 
-    T read(ival auto && address)
+    template<ival U>
+    T read(U && address)
     {
       assert(("single RAM read per cycle",panel.cycle>last_read_cycle));
       last_read_cycle = panel.cycle;
       if (! exec.active) return {};
       panel.update_energy(static_ram::EREAD);
-      u64 t = proxy::time(address); // time at which the read starts
+      auto [addr,t] = proxy::get_vt(std::forward<U>(address));
       while (! writes.empty() && writes[0].t <= t) {
 	writes[0].commit(*this);
 	std::pop_heap(writes.begin(),writes.end());
 	writes.pop_back();
       }
-      u64 addr = proxy::get(address);
       assert(addr<N);
       t += std::llround(static_ram::LATENCY); // time at which the read completes
       T readval = data[addr];
       readval.set_time(t);
       return readval;
     }
-    
+
     void reset()
     {
       if (! exec.active) return;
@@ -2722,14 +3269,11 @@ namespace hcm {
       for (int i=0; i<N; i++) a[i] = x[i];
     }
 
-    val<M,T> read(ival auto && address)
+    template<ival U>
+    val<M,T> read(U && address)
     {
-      auto i = proxy::get(address);
+      auto [i,t] = proxy::get_vt(std::forward<U>(address));
       assert(i<N);
-      u64 t = 0;
-      if constexpr (valtype<decltype(address)>) {
-	t = max(t,address.time());
-      }
       //TODO: energy and delay
       return {proxy::get(a[i]),t};
     }    
@@ -2743,26 +3287,27 @@ namespace hcm {
   val<1> operator== (T1&& x1, T2&& x2)
   {
     static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = EQUAL<valt<T1>::size>;
+    constexpr circuit c = EQUAL<valt<T1>::size>;
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) == proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1==v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator== (T1&& x1, T2 x2)
   {
-    static constexpr circuit reduction = NOR<valt<T1>::size>;
+    constexpr circuit reduction = NOR<valt<T1>::size>;
     circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
     proxy::update_logic(c);
-    auto t = proxy::time(x1) + c.delay();
-    return {proxy::get(x1) == x2, t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1==x2, t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator== (T1 x1, T2&& x2)
   {
-    return x2 == x1;
+    return std::forward<T2>(x2) == x1;
   }
 
   // INEQUALITY
@@ -2770,26 +3315,27 @@ namespace hcm {
   val<1> operator!= (T1&& x1, T2&& x2)
   {
     static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = NEQ<valt<T1>::size>;
+    constexpr circuit c = NEQ<valt<T1>::size>;
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) != proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1!=v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator!= (T1&& x1, T2 x2)
   {
-    static constexpr circuit reduction = OR<valt<T1>::size>;
+    constexpr circuit reduction = OR<valt<T1>::size>;
     circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
     proxy::update_logic(c);
-    auto t = proxy::time(x1) + c.delay();
-    return {proxy::get(x1) != x2, t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1!=x2, t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator!= (T1 x1, T2&& x2)
   {
-    return x2 != x1;
+    return std::forward<T2>(x2) != x1;
   }
 
   // GREATER THAN
@@ -2797,21 +3343,23 @@ namespace hcm {
   val<1> operator> (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) > proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1>v2, max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator> (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) > x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1>x2, t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator> (T1 x1, T2&& x2)
   {
-    return x2 < x1;
+    return std::forward<T2>(x2) < x1;
   }
   
   // LESS THAN
@@ -2819,21 +3367,23 @@ namespace hcm {
   val<1> operator< (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) < proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1<v2, max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator< (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) < x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1<x2, t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator< (T1 x1, T2&& x2)
   {
-    return x2 > x1;
+    return std::forward<T2>(x2) > x1;
   }
 
   // GREATER THAN OR EQUAL
@@ -2841,21 +3391,23 @@ namespace hcm {
   val<1> operator>= (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) >= proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1>=v2, max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator>= (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) >= x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1>=x2, t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator>= (T1 x1, T2&& x2)
   {
-    return x2 <= x1;
+    return std::forward<T2>(x2) <= x1;
   }
   
   // LESS THAN OR EQUAL
@@ -2863,89 +3415,91 @@ namespace hcm {
   val<1> operator<= (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) <= proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1<=v2, max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator<= (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) <= x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1<=x2, t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
   val<1> operator<= (T1 x1, T2&& x2)
   {
-    return x2 >= x1;
+    return std::forward<T2>(x2) >= x1;
   }
 
   // ADDITION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1,T2> operator+ (T1&& x1, T2&& x2)
   {
-    static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = ADD<valt<T1>::size>;
+    static constexpr circuit c = ADD<valt<T1,T2>::size>;
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) + proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1+v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
   valt<T1,T2> operator+ (T1&& x1, T2 x2)
   {
     if (x2==0) return x1;
-    static constexpr circuit c = INC<valt<T1>::size>;
+    constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_logic(c);
-    auto t = proxy::time(x1) + c.delay();
-    return {proxy::get(x1) + x2, t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1+x2, t1+c.delay()};
   }  
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
   valt<T1,T2> operator+ (T1 x1, T2&& x2)
   {
-    return x2 + x1;
+    return std::forward<T2>(x2) + x1;
   }
 
   // CHANGE SIGN
   template<valtype T>
   valt<T> operator- (T&& x)
   {
-    static constexpr circuit c = INV * valt<T>::size + INC<valt<T>::size>;
+    constexpr circuit c = INV * valt<T>::size + INC<valt<T>::size>;
     proxy::update_logic(c);
-    auto t = proxy::time(x) + c.delay();
-    return {-proxy::get(x), t};
+    auto [v,t] = proxy::get_vt(std::forward<T>(x));
+    return {-v, t+c.delay()};
   }
   
   // SUBTRACTION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1,T2> operator- (T1&& x1, T2&& x2)
   {
-    static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = SUB<valt<T1>::size>;
+    static constexpr circuit c = SUB<valt<T1,T2>::size>;
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) - proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1-v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
   valt<T1,T2> operator- (T1&& x1, T2 x2)
   {
     if (x2==0) return x1;
-    static constexpr circuit c = INC<valt<T1>::size>;
+    constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_logic(c);
-    auto t = proxy::time(x1) + c.delay();
-    return {proxy::get(x1) - x2, t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1-x2, t1+c.delay()};
   }
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
   valt<T1,T2> operator- (T1 x1, T2&& x2)
   {
     if (x1==0) return -x2;
-    static constexpr circuit c = INC<valt<T2>::size>;
+    constexpr circuit c = INC<valt<T2>::size>;
     proxy::update_logic(c);
-    auto t = proxy::time(x2) + c.delay();
-    return {x1 - proxy::get(x2), t};
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {x1-v2, t2+c.delay()};
   }
   
   // LEFT SHIFT
@@ -2953,31 +3507,35 @@ namespace hcm {
   valt<T1> operator<< (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) << proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1<<v2, max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>)
   valt<T1> operator<< (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) << x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1<<x2, t1};
   }
-  
+
   // RIGHT SHIFT
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1> operator>> (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) >> proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1>>v2, max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>)
   valt<T1> operator>> (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) >> x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1>>x2, t1};
   }
 
   // MULTIPLICATION
@@ -2985,21 +3543,23 @@ namespace hcm {
   valt<T1,T2> operator* (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) * proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1*v2, max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
   valt<T1,T2> operator* (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) * x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1*x2, t1};
   }
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
   valt<T1,T2> operator* (T1 x1, T2&& x2)
   {
-    return x2 * x1;
+    return std::forward<T2>(x2) * x1;
   }
 
   // DIVISION
@@ -3007,15 +3567,17 @@ namespace hcm {
   valt<T1> operator/ (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) / proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1/v2, max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // divisor is a constant
   valt<T1> operator/ (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) / x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1/x2, t1};
   }
   
   // MODULO (REMAINDER)
@@ -3023,99 +3585,105 @@ namespace hcm {
   valt<T2> operator% (T1&& x1, T2&& x2)
   {
     // TODO
-    auto t = max(proxy::time(x1),proxy::time(x2));
-    return {proxy::get(x1) % proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1%v2, max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // modulus is a constant
   valt<T2> operator% (T1&& x1, T2 x2)
   {
     // TODO
-    return {proxy::get(x1) % x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1%x2, t1};
   }
 
   // BITWISE AND
   template<valtype T1, valtype T2>
   valt<T1,T2> operator& (T1&& x1, T2&& x2)
   {
-    static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = AND<2> * valt<T1>::size;
+    static constexpr circuit c = AND<2> * min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) & proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1&v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> // second argument is constant
   valt<T1> operator& (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) & x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1&x2, t1};
   }
 
   template<std::integral T1, valtype T2> // first argument is constant
   valt<T2> operator& (T1 x1, T2&& x2)
   {
     // no transistors
-    return x2 & x1;
+    return std::forward<T2>(x2) & x1;
   }
   
   // BITWISE OR
   template<valtype T1, valtype T2>
   valt<T1,T2> operator| (T1&& x1, T2&& x2)
   {
-    static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = OR<2> * valt<T1>::size;
+    static constexpr circuit c = OR<2> * min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) | proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1|v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> // second argument is constant
   valt<T1> operator| (T1&& x1, T2 x2)
   {
     // no transistors
-    return {proxy::get(x1) | x2, proxy::time(x1)};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1|x2, t1};
   }
 
   template<std::integral T1, valtype T2> // first argument is constant
   valt<T2> operator| (T1 x1, T2&& x2)
   {
     // no transistors
-    return x2 | x1;
+    return std::forward<T2>(x2) | x1;
   }
 
   // BITWISE EXCLUSIVE OR
   template<valtype T1, valtype T2>
   valt<T1,T2> operator^ (T1&& x1, T2&& x2)
   {
-    static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr circuit c = XOR<2> * valt<T1>::size;
+    static constexpr circuit c = XOR<2> * min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
-    auto t = max(proxy::time(x1),proxy::time(x2)) + c.delay();
-    return {proxy::get(x1) ^ proxy::get(x2), t};
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    return {v1^v2, max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> // second argument is constant
   valt<T1> operator^ (T1&& x1, T2 x2)
   {
     circuit c = INV * ones<valt<T1>::size>(x2); // not constexpr
-    proxy::update_logic(c);;
-    return {proxy::get(x1) ^ x2, proxy::time(x1)+c.delay()};
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1^x2, t1+c.delay()};
   }
 
   template<std::integral T1, valtype T2> // first argument is constant
   valt<T2> operator^ (T1 x1, T2&& x2)
   {
-    return x2 ^ x1;
+    return std::forward<T2>(x2) ^ x1;
   }
 
   // BITWISE COMPLEMENT
   template<valtype T>
   valt<T> operator~ (T&& x)
   {
-    static constexpr circuit c = INV * valt<T>::size;
+    constexpr circuit c = INV * valt<T>::size;
     proxy::update_logic(c);
-    return {~proxy::get(x), proxy::time(x)+c.delay()};
+    auto [v,t] = proxy::get_vt(std::forward<T>(x));
+    return {~v, t+c.delay()};
   }
 
   // CONCATENATE BITS
@@ -3123,42 +3691,30 @@ namespace hcm {
   auto concat(T1&& x1, T2&& x2, T&&... x)
   {
     // no transistors (TODO: wires)
-    auto t = std::max({proxy::time(x1),proxy::time(x2),proxy::time(x)...});
     if constexpr (sizeof...(x)==0) {
-      auto y = proxy::concatenate(x1,x2);
-      proxy::set_time(y,t);
-      return y;
+      return proxy::concat2(std::forward<T1>(x1),std::forward<T2>(x2));
     } else {
-      auto y = proxy::concatenate(proxy::concatenate(x1,x2),x...);
-      proxy::set_time(y,t);
-      return y;
+      return proxy::concat2(proxy::concat2(std::forward<T1>(x1),std::forward<T2>(x2)),std::forward<T>(x)...);
     }
   }
 
-  // MAKE ARRAY
-  template<typename... T> 
-  auto make_array(T&&... args)
-  {
-    using U = valt<T...>;
-    static constexpr u64 N = sizeof...(args);
-    arr<U,N> a = {U{args}...};
-    return a;
-  }
-  
   // SELECT BETWEEN TWO VALUES
   template<valtype T, valtype T1, valtype T2>
   valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
   {
     static_assert(valt<T>::size == 1);
     static_assert(valt<T1>::size == valt<T2>::size);
-    static constexpr auto c = MUX<2,valt<T1>::size>;
+    constexpr auto c = MUX<2,valt<T1>::size>;
     proxy::update_logic(c[0]); // MUX select
-    proxy::update_logic(c[1]); // MUX data    
-    auto t = std::max({proxy::time(cond)+std::lround(c[0].d),proxy::time(x1),proxy::time(x2)}) + std::lround(c[1].d);
-    if (proxy::get(cond)) {
-      return {proxy::get(x1), t};
+    proxy::update_logic(c[1]); // MUX data
+    auto [vc,tc] = proxy::get_vt(std::forward<T>(cond));
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    auto t = std::max({tc+c[0].delay(),t1,t2}) + c[1].delay();
+    if (bool(vc)) {
+      return {v1,t};
     } else {
-      return {proxy::get(x2), t};
+      return {v2,t};
     }
   }
 
@@ -3166,9 +3722,9 @@ namespace hcm {
   template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
   void execute(T &&mask, const A &f)
   {
+    static_assert(std::unsigned_integral<typename valt<T>::type>);
     auto prev_exec = exec;
-    u64 m = proxy::get(mask);
-    auto t = proxy::time(mask);
+    auto [m,t] = proxy::get_vt(std::forward<T>(mask));
     for (u64 i=0; i<valt<T>::size; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
@@ -3189,27 +3745,28 @@ namespace hcm {
   auto execute(T &&mask, const A &f)
   {
     static_assert(valtype<return_type<A>>);
-    static constexpr u64 N = valt<T>::size;
+    static_assert(std::unsigned_integral<typename valt<T>::type>);
+    constexpr u64 N = valt<T>::size;
     using rtype = valt<return_type<A>>;
     auto prev_exec = exec;
-    u64 m = proxy::get(mask);
-    auto t = proxy::time(mask);
-    arr<rtype,N> result = [&] (u64 i) {
+    auto [m,t] = proxy::get_vt(std::forward<T>(mask));
+    arr<rtype,N> result;
+    for (u64 i=0; i<N; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
       // to prevent cheating, we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<A>) {
-	return f();
+	result[i] = f();
       } else {
 	static_assert(std::invocable<A,u64>);
-	return f(i);
+	result[i] = f(i);
       }
     };
     exec = prev_exec;
     return result;
   }
-  
+
   // ###########################
 }
 

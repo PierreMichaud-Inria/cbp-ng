@@ -2,21 +2,20 @@
  - ROM
  - carry-save adder
  - integer multiplier
- - (floating-point operators)
  - popcount
- 
-* missing operations: >, <, >=, <=, *, <<, >>, %, /
 
-* hardware complexity of data transfers
+* missing operations (>, <, >=, <=, *, <<, >>, %, /)
 
 * general reduction primitive for class arr
 
 * general scan primitive for class arr (https://en.wikipedia.org/wiki/Prefix_sum)
 
-* CAM?
-
 * static power
 
 * user manual
 
+To do eventually (but not priority):
+
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
+
+* floating point

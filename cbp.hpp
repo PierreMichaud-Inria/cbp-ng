@@ -25,12 +25,9 @@ class simulator {
   auto next_branch()
   {
     auto [branch_pc,branch_dir,nextpc] = strace.next();
-    hcm::val<64> pc = branch_pc;
-    hcm::val<1> dir = branch_dir;
-    pc.set_time(t);
-    dir.set_time(t); // FIXME?
+    std::tuple branch {branch_pc,branch_dir,t};
     t += hcm::panel.clock_cycle_ps;
-    return std::tuple{pc,dir};
+    return branch;
   }
 
 public:
@@ -44,16 +41,16 @@ public:
   {
     for (int i=0; i<trace_length; i++) {
       nbranch++;
-      auto [pc,dir] = next_branch();
-      hcm::val<1> pred = p.predict(pc);
-      assert(pred.time() >= pc.time());
-      uint64_t latency_ps = pred.time()-pc.time();
+      auto [branch_pc,branch_dir,start_time] = next_branch();
+      auto pred = p.predict({branch_pc,start_time});
+      assert(pred.time() >= start_time);
+      uint64_t latency_ps = pred.time()-start_time;
       if (latency_ps > max_pred_lat_ps)
 	max_pred_lat_ps = latency_ps;
-      if (pred.get() != dir.get()) {
+      if (pred.get() != branch_dir) {
 	nmisp++;
       }
-      p.update(pc,dir);
+      p.update({branch_pc,start_time},{branch_dir,start_time/*FIXME?*/});
       hcm::panel.next_cycle();
     }
   }
