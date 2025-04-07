@@ -60,7 +60,7 @@ namespace hcm {
   using f32 = float;
   using f64 = double;
 
-  template<u64> struct hard {};
+  template<u64> struct fo {};
 
   template<typename T>
   concept arith = std::integral<T> || std::floating_point<T>;
@@ -372,7 +372,7 @@ namespace hcm {
       return t==0;
     }
 
-    u64 delay() const {return llround(d);}
+    constexpr u64 delay() const {return llround(d);}
 
     void print(std::string s = "", std::ostream & os = std::cout) const
     {
@@ -1918,7 +1918,7 @@ namespace hcm {
 
   template<action A>
   using return_type = action_return<A>::type;
-  
+
 
   // ###########################
   // GLOBAL VARIABLES
@@ -2063,14 +2063,14 @@ namespace hcm {
   private:
     T data = 0;
     u64 timing = 0; // time
-    u64 read_credit = 1;
+    u64 read_credit = 0;
 
     T fit(T x) const requires std::integral<T>
     {
       return truncate<N>(x);
     }
 
-    T sign_extended() const
+    T sign_extended() const requires std::signed_integral<T>
     {
       if constexpr (N < bitwidth<T>) {
 	assert((std::make_unsigned_t<T>(data) >> N) == 0);
@@ -2094,9 +2094,10 @@ namespace hcm {
 #ifdef CHECK_FANOUT
 	assert(("fanout exhausted",read_credit!=0));
 #else
-	// fanout exhausted: now delay increases linearly with the number of reads
+	// fanout exhausted: delay increases linearly with the number of reads
 	// delay increment is that of a FO2 inverter (wires not modeled, TODO?)	
 	constexpr circuit fo2inv = inv{}.make(2*INVCAP) * N; // N inverters in parallel
+	static_assert(fo2inv.delay()!=0);
 	panel.update_logic(fo2inv);
 	set_time(time()+fo2inv.delay());
 #endif
@@ -2110,9 +2111,11 @@ namespace hcm {
       return data;
     }
 
-    T get() const && // rvalue
+    T get() && // rvalue
     {
-      return data;
+      auto old_data = data;
+      data = 0; // destructive read
+      return old_data;
     }
 
     T get() & requires std::signed_integral<T> // lvalue
@@ -2121,19 +2124,21 @@ namespace hcm {
       return sign_extended();
     }
 
-    T get() const && requires std::signed_integral<T> // rvalue
+    T get() && requires std::signed_integral<T> // rvalue
     {
-      return sign_extended();
+      auto old_data = sign_extended();
+      data = 0; // destructive read
+      return old_data;
     }
 
     auto get_vt() & // lvalue
     {
-      return std::tuple {get(),time()};
+      return std::tuple {get(),time()}; // list initialization, get() executes before time()
     }
 
-    auto get_vt() const && // rvalue
+    auto get_vt() && // rvalue
     {
-      return std::tuple {std::move(*this).get(),time()};
+      return std::tuple {std::move(*this).get(),time()}; // list initialization
     }    
 
     void operator= (val & x)
@@ -2143,7 +2148,7 @@ namespace hcm {
       set_time(xt);
     }
 
-    void operator= (const val && x)
+    void operator= (val && x)
     {
       auto [xv,xt] = std::move(x).get_vt();
       if (exec.active) data = xv;
@@ -2192,10 +2197,6 @@ namespace hcm {
 
     val() {}
 
-    val(val &x) : val(x.get(),x.time()) {}
-
-    val(const val &&x) : val(std::move(x).get(),x.time()) {}
-
     val(std::integral auto x, u64 t=0) requires std::integral<T> : data(fit(x))
     {
       set_time(t);
@@ -2212,17 +2213,20 @@ namespace hcm {
       set_time(t);
     }
 
+    val(val &x) : val{x.get(),x.time()} {} // list initialization, get() executes before time()
+
+    val(const val &&x) : val{std::move(x).get(),x.time()} {} // list initialization
+
     template<valtype U> requires std::unsigned_integral<T>
-    val(U &&x) : val(to_unsigned(std::forward<U>(x).get()),std::forward<U>(x).time()) {}
+    val(U &&x) : val{to_unsigned(std::forward<U>(x).get()),x.time()} {} // list initialization
 
     template<valtype U>
-    val(U &&x) : val(std::forward<U>(x).get(),std::forward<U>(x).time()) {}
+    val(U &&x) : val{std::forward<U>(x).get(),x.time()} {} // list initialization
 
-    template<u64 FO>
-    void fanout(hard<FO>) & // lvalue
+    template<u64 FO> requires (FO>=2)
+    void fanout(fo<FO>) & // lvalue
     {
 #ifndef FREE_FANOUT
-      if constexpr (FO<2) return;
       // delay logarithmic with fanout (wires not modeled, TODO?)
       panel.update_logic(REP<N,FO>);
       set_time(time()+REP<N,FO>.delay());
@@ -2230,11 +2234,21 @@ namespace hcm {
 #endif
     }
 
+    template<u64 FO> requires (FO==1)
+    [[nodiscard]] val&& fanout(fo<FO>) & // lvalue
+    {
+      return std::move(*this);
+    }
+
     void fanout(auto) && = delete; // rvalue, not needed
 
     void print(std::string before="", std::string after="\n", bool t=true, std::ostream & os=std::cout) const
     {
-      os << before << +data;
+      if constexpr (std::signed_integral<T>) {
+	os << before << +sign_extended();
+      } else {
+	os << before << +data;
+      }
       if (t)
 	os << " (t=" << time() << " ps)";
       os << after << std::flush;
@@ -2273,7 +2287,7 @@ namespace hcm {
     }
 
     template<u64 W>
-    auto make_array(val<W>&&) const && // rvalue
+    auto make_array(val<W>&&) && // rvalue
     {
       static_assert(N!=0);
       static_assert(std::unsigned_integral<T>);
@@ -2295,7 +2309,7 @@ namespace hcm {
       return {reverse_bits(get()) >> (bitwidth<T>-N), time()};
     }
 
-    [[nodiscard]] val reverse() const && requires std::unsigned_integral<T> // rvalue
+    [[nodiscard]] val reverse() && requires std::unsigned_integral<T> // rvalue
     {
       // no transistors
       return {reverse_bits(std::move(*this).get()) >> (bitwidth<T>-N), time()};
@@ -2309,7 +2323,7 @@ namespace hcm {
       return val<std::bit_width(N)> {n};
     }
 
-    auto ones() const && // rvalue
+    auto ones() && // rvalue
     {
       // TODO: transistors & time
       auto [x,t] = std::move(*this).get_vt();
@@ -2326,7 +2340,7 @@ namespace hcm {
       return {y,t+c.delay()};
     }
 
-    [[nodiscard]] val priority_encode() const && requires std::unsigned_integral<T> // rvalue
+    [[nodiscard]] val priority_encode() && requires std::unsigned_integral<T> // rvalue
     {
       static constexpr circuit c = priority_encoder<N>;
       auto [x,t] = std::move(*this).get_vt();
@@ -2336,19 +2350,20 @@ namespace hcm {
     }
 
     template<u64 M>
-    arr<val,M> replicate(hard<M>) & // lvalue
+    arr<val,M> replicate(fo<M>) & // lvalue
     {
-      // only the user knows the fanout (>=M) and can set it
+      // only the user knows the actual fanout (>=M) and can set it
       arr<val,M> a;
       for (u64 i=0; i<M; i++) a[i] = *this;
       return a;
     }
 
     template<u64 M>
-    arr<val,M> replicate(hard<M>) && // rvalue
+    arr<val,M> replicate(fo<M>) && // rvalue
     {
-      // the user cannot set the fanout, but the fanout is known
-      fanout(hard<M>{});
+      // the user cannot set the fanout (rvalue), but the fanout is known
+      static_assert(M>=2);
+      fanout(fo<M>{});
       arr<val,M> a;
       for (u64 i=0; i<M; i++) a[i] = std::move(*this);
       return a;
@@ -2690,7 +2705,7 @@ namespace hcm {
       return b;
     }
 
-    auto get() const && // rvalue
+    auto get() && // rvalue
     {
       std::array<atype,N> b;
       for (int i=0; i<N; i++) b[i] = std::move(elem[i]).get();
@@ -2801,10 +2816,16 @@ namespace hcm {
       }
     }
 
-    template<u64 FO>
-    void fanout(hard<FO>) & // lvalue
+    template<u64 FO> requires (FO>=2)
+    void fanout(fo<FO>) & // lvalue
     {
-      for (auto &e : elem) e.fanout(hard<FO>{});
+      for (auto &e : elem) e.fanout(fo<FO>{});
+    }
+
+    template<u64 FO> requires (FO==1)
+    [[nodiscard]] arr&& fanout(fo<FO>) & // lvalue
+    {
+      return std::move(*this);
     }
 
     void fanout(auto) && = delete; // rvalue, not needed
@@ -2830,7 +2851,7 @@ namespace hcm {
       return val<N*T::size> {y,time()};
     }
 
-    auto concat() const && requires std::unsigned_integral<atype> // rvalue
+    auto concat() && requires std::unsigned_integral<atype> // rvalue
     {
       // element 0 is at rightmost position
       static_assert(N!=0);
@@ -2853,7 +2874,7 @@ namespace hcm {
     }
 
     template<std::convertible_to<valt<T>> U>
-    [[nodiscard]] auto append(U &&x) const && // rvalue
+    [[nodiscard]] auto append(U &&x) && // rvalue
     {
       arr<valt<T>,N+1> b;
       for (u64 i=0; i<N; i++) {
@@ -2879,7 +2900,7 @@ namespace hcm {
     }
 
     template<u64 W>
-    [[nodiscard]] auto make_array(val<W>&&) const && // rvalue
+    [[nodiscard]] auto make_array(val<W>&&) && // rvalue
     {
       static_assert(std::unsigned_integral<atype>);
       static_assert(W!=0 && W<=64);
@@ -2923,7 +2944,7 @@ namespace hcm {
     }
 
     template<valtype U>
-    [[nodiscard]] auto shift_left(U && x) const && // rvalue
+    [[nodiscard]] auto shift_left(U && x) && // rvalue
     {
       static_assert(std::unsigned_integral<atype>);
       static_assert(std::unsigned_integral<typename U::type>);
@@ -2990,7 +3011,7 @@ namespace hcm {
     }
 
     template<valtype U>
-    [[nodiscard]] auto shift_right(U && x) const && // rvalue
+    [[nodiscard]] auto shift_right(U && x) && // rvalue
     {
       static_assert(std::unsigned_integral<atype>);
       static_assert(std::unsigned_integral<typename U::type>);
@@ -3044,7 +3065,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_xor() const && // rvalue
+    valt<T> fold_xor() && // rvalue
     {
       if constexpr (N>=2) {
 	constexpr circuit c = XOR<N> * T::size;
@@ -3078,7 +3099,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_or() const && // rvalue
+    valt<T> fold_or() && // rvalue
     {
       if constexpr (N>=2) {
 	constexpr circuit c = OR<N> * T::size;
@@ -3112,7 +3133,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_and() const && // rvalue
+    valt<T> fold_and() && // rvalue
     {
       if constexpr (N>=2) {
 	constexpr circuit c = AND<N> * T::size;
@@ -3702,6 +3723,7 @@ namespace hcm {
   template<valtype T, valtype T1, valtype T2>
   valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
   {
+    // this is NOT conditional execution: both sides are evaluated
     static_assert(valt<T>::size == 1);
     static_assert(valt<T1>::size == valt<T2>::size);
     constexpr auto c = MUX<2,valt<T1>::size>;
