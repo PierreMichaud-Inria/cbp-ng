@@ -1167,7 +1167,7 @@ namespace hcm {
     }
   }
 
-  
+
   template<bool INCR=false>
   constexpr circuit full_adder(f64 co)
   {
@@ -1178,7 +1178,7 @@ namespace hcm {
     }
   }
 
-  
+
   template<u64 N, bool INCR=false, bool CARRYIN=false>
   constexpr circuit adder_ks(f64 co)
   {
@@ -1235,6 +1235,7 @@ namespace hcm {
     } 
     return (tree | bws) + (sum || carryout);
   }
+
 
 
   // ###########################
@@ -2100,9 +2101,9 @@ namespace hcm {
 	static_assert(fo2inv.delay()!=0);
 	panel.update_logic(fo2inv);
 	set_time(time()+fo2inv.delay());
-#endif
+#endif // CHECK_FANOUT
       }
-#endif
+#endif // FREE_FANOUT
     }
 
     T get() & // lvalue
@@ -2223,10 +2224,11 @@ namespace hcm {
     template<valtype U>
     val(U &&x) : val{std::forward<U>(x).get(),x.time()} {} // list initialization
 
-    template<u64 FO> requires (FO>=2)
+    template<u64 FO>
     void fanout(fo<FO>) & // lvalue
     {
 #ifndef FREE_FANOUT
+      static_assert(FO>=2);
       // delay logarithmic with fanout (wires not modeled, TODO?)
       panel.update_logic(REP<N,FO>);
       set_time(time()+REP<N,FO>.delay());
@@ -2234,8 +2236,7 @@ namespace hcm {
 #endif
     }
 
-    template<u64 FO> requires (FO==1)
-    [[nodiscard]] val&& fanout(fo<FO>) & // lvalue
+    [[nodiscard]] val&& fo1() & // lvalue
     {
       return std::move(*this);
     }
@@ -2751,18 +2752,18 @@ namespace hcm {
     }
 
     template<std::convertible_to<T> U>
-    arr(std::array<U,N> &b, u64 t=0)
+    arr(std::array<U,N> &b)
     {
       for (u64 i=0; i<N; i++) {
-	elem[i] = {b[i],t};
+	elem[i] = b[i];
       }
     }
 
     template<std::convertible_to<T> U>
-    arr(U (&b)[N], u64 t=0)
+    arr(U (&b)[N])
     {
       for (u64 i=0; i<N; i++) {
-	elem[i] = {b[i],t};
+	elem[i] = b[i];
       }
     }
 
@@ -2816,14 +2817,13 @@ namespace hcm {
       }
     }
 
-    template<u64 FO> requires (FO>=2)
+    template<u64 FO>
     void fanout(fo<FO>) & // lvalue
     {
       for (auto &e : elem) e.fanout(fo<FO>{});
     }
 
-    template<u64 FO> requires (FO==1)
-    [[nodiscard]] arr&& fanout(fo<FO>) & // lvalue
+    [[nodiscard]] arr&& fo1() & // lvalue
     {
       return std::move(*this);
     }
@@ -2891,12 +2891,14 @@ namespace hcm {
       static_assert(W!=0 && W<=64);
       constexpr u64 NBITS = T::size*N;
       constexpr u64 M = (NBITS+W-1)/W;
-      const auto data = get();
-      const auto t = time(); // FIXME?
+      auto data = get();
+      auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       auto aa = unpack_bits<W>(a);
       static_assert(aa.size()>=M);
-      return arr<val<W>,M> {aa,t};
+      arr<val<W>,M> out {aa};
+      out.set_time(t);
+      return out;
     }
 
     template<u64 W>
@@ -2906,12 +2908,14 @@ namespace hcm {
       static_assert(W!=0 && W<=64);
       constexpr u64 NBITS = T::size*N;
       constexpr u64 M = (NBITS+W-1)/W;
-      const auto data = std::move(*this).get();
-      const auto t = time(); // FIXME?
+      auto data = std::move(*this).get();
+      auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       auto aa = unpack_bits<W>(a);
       static_assert(aa.size()>=M);
-      return arr<val<W>,M> {aa,t};
+      arr<val<W>,M> out {aa};
+      out.set_time(t);
+      return out;
     }
 
     template<valtype U>
@@ -2921,8 +2925,8 @@ namespace hcm {
       static_assert(std::unsigned_integral<typename U::type>);
       static_assert(N!=0);
       static_assert(U::size!=0);
-      const auto data = get();
-      const auto t = time(); // FIXME?
+      auto data = get();
+      auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
 	for (u64 i=a.size(); i!=0; i--) a[i] = a[i]-1;
@@ -2936,10 +2940,8 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out;
-      for (u64 i=0; i<N; i++) {
-	out[i] = {aa[i],t};
-      }
+      arr<valt<T>,N> out {aa};
+      out.set_time(t);
       return out;
     }
 
@@ -2950,8 +2952,8 @@ namespace hcm {
       static_assert(std::unsigned_integral<typename U::type>);
       static_assert(N!=0);
       static_assert(U::size!=0);
-      const auto data = std::move(*this).get();
-      const auto t = time(); // FIXME?
+      auto data = std::move(*this).get();
+      auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
 	for (u64 i=a.size(); i!=0; i--) a[i] = a[i]-1;
@@ -2965,10 +2967,8 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out;
-      for (u64 i=0; i<N; i++) {
-	out[i] = {aa[i],t};
-      }
+      arr<valt<T>,N> out {aa};
+      out.set_time(t);
       return out;
     }
 
@@ -2979,8 +2979,8 @@ namespace hcm {
       static_assert(std::unsigned_integral<typename U::type>);
       static_assert(N!=0);
       static_assert(U::size!=0);
-      const auto data = get();
-      const auto t = time(); // FIXME?
+      auto data = get();
+      auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
 	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i]+1;
@@ -3003,10 +3003,8 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out;
-      for (u64 i=0; i<N; i++) {
-	out[i] = {aa[i],t};
-      }
+      arr<valt<T>,N> out {aa};
+      out.set_time(t);
       return out;
     }
 
@@ -3017,8 +3015,8 @@ namespace hcm {
       static_assert(std::unsigned_integral<typename U::type>);
       static_assert(N!=0);
       static_assert(U::size!=0);
-      const auto data = std::move(*this).get();
-      const auto t = time(); // FIXME?
+      auto data = std::move(*this).get();
+      auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
 	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i]+1;
@@ -3041,10 +3039,8 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out;
-      for (u64 i=0; i<N; i++) {
-	out[i] = {aa[i],t};
-      }
+      arr<valt<T>,N> out {aa};
+      out.set_time(t);
       return out;
     }
 
@@ -3053,7 +3049,7 @@ namespace hcm {
       if constexpr (N>=2) {
 	constexpr circuit c = XOR<N> * T::size;
 	panel.update_logic(c);
-	const auto data = get();
+	auto data = get();
 	auto t = time() + c.delay();
 	atype x = 0;
 	for (auto e : data) x ^= e;
@@ -3070,7 +3066,7 @@ namespace hcm {
       if constexpr (N>=2) {
 	constexpr circuit c = XOR<N> * T::size;
 	panel.update_logic(c);
-	const auto data = std::move(*this).get();
+	auto data = std::move(*this).get();
 	auto t = time() + c.delay();
 	atype x = 0;
 	for (auto e : data) x ^= e;
@@ -3081,13 +3077,13 @@ namespace hcm {
 	return 0;
       }
     }
-    
+
     valt<T> fold_or() & // lvalue
     {
       if constexpr (N>=2) {
 	constexpr circuit c = OR<N> * T::size;
 	panel.update_logic(c);
-	const auto data = get();
+	auto data = get();
 	auto t = time() + c.delay();
 	atype x = 0;
 	for (auto e : data) x |= e;
@@ -3104,7 +3100,7 @@ namespace hcm {
       if constexpr (N>=2) {
 	constexpr circuit c = OR<N> * T::size;
 	panel.update_logic(c);
-	const auto data = std::move(*this).get();
+	auto data = std::move(*this).get();
 	auto t = time() + c.delay();
 	atype x = 0;
 	for (auto e : data) x |= e;
@@ -3121,7 +3117,7 @@ namespace hcm {
       if constexpr (N>=2) {
 	constexpr circuit c = AND<N> * T::size;
 	panel.update_logic(c);
-	const auto data = get();
+	auto data = get();
 	auto t = time() + c.delay();
 	atype x = 0;
 	for (auto e : data) x &= e;
@@ -3138,7 +3134,7 @@ namespace hcm {
       if constexpr (N>=2) {
 	constexpr circuit c = AND<N> * T::size;
 	panel.update_logic(c);
-	const auto data = std::move(*this).get();
+	auto data = std::move(*this).get();
 	auto t = time() + c.delay();
 	atype x = 0;
 	for (auto e : data) x &= e;

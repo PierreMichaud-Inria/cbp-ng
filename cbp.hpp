@@ -42,12 +42,12 @@ public:
     for (int i=0; i<trace_length; i++) {
       nbranch++;
       auto [branch_pc,branch_dir,start_time] = next_branch();
-      auto pred = p.predict({branch_pc,start_time});
-      assert(pred.time() >= start_time);
-      uint64_t latency_ps = pred.time()-start_time;
+      auto [prediction,pred_time] = p.predict({branch_pc,start_time}).get_vt();
+      assert(pred_time >= start_time);
+      uint64_t latency_ps = pred_time - start_time;
       if (latency_ps > max_pred_lat_ps)
 	max_pred_lat_ps = latency_ps;
-      if (pred.get() != branch_dir) {
+      if (prediction != branch_dir) {
 	nmisp++;
       }
       p.update({branch_pc,start_time},{branch_dir,start_time/*FIXME?*/});

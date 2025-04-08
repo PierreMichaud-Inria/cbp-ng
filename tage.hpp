@@ -25,18 +25,18 @@ struct path_history {
   {
     constexpr u64 K = in.size;
     if constexpr (N==0) {
-      hr = (hr<<1) ^ in;
+      hr = (hr<<1) ^ in.fo1();
     } else {
       if constexpr (R==0) {
 	auto a = h.shift_left(val<1>{0});
-	h[0] = a[0].fanout(fo<1>{}) ^ in;
-	for (u64 i=1; i<N; i++) h[i] = a[i].fanout(fo<1>{});
+	h[0] = a[0].fo1() ^ in.fo1();
+	for (u64 i=1; i<N; i++) h[i] = a[i].fo1();
       } else {
 	auto a = h.append(hr).shift_left(val<1>{0});
 	static_assert(a.size==N+1);
-	h[0] = a[0].fanout(fo<1>{}) ^ in;
-	for (u64 i=1; i<N; i++) h[i] = a[i].fanout(fo<1>{});
-	hr = a[N].fanout(fo<1>{});
+	h[0] = a[0].fo1() ^ in.fo1();
+	for (u64 i=1; i<N; i++) h[i] = a[i].fo1();
+	hr = a[N].fo1();
       }
     }
   }
@@ -52,12 +52,12 @@ struct path_history {
     if constexpr (R==0) {
       auto a = h.make_array(val<STEP>{});
       return arr<val<STEP>,chunks> {[&](int i) {
-	return (mask!=0 && i==chunks-1)? a[i].fanout(fo<1>{}) & mask: a[i].fanout(fo<1>{});
+	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask: a[i].fo1();
       }};
     } else {
       auto a = h.append(hr).make_array(val<STEP>{});
       return arr<val<STEP>,chunks> {[&](int i) {
-	return (mask!=0 && i==chunks-1)? a[i].fanout(fo<1>{}) & mask: a[i].fanout(fo<1>{});
+	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask: a[i].fo1();
       }};
     }
   }
@@ -70,7 +70,7 @@ template<u64 N>
   ctr.fanout(fo<6>{});
   val<N> incsat = select(ctr==ctr.maxval,ctr,ctr+1);
   val<N> decsat = select(ctr==ctr.minval,ctr,ctr-1);
-  return select(incr,incsat,decsat);
+  return select(incr.fo1(),incsat.fo1(),decsat.fo1());
 }
 
 
@@ -166,12 +166,12 @@ struct tage : predictor {
     
     // extract prediction bits
     arr<val<1>,NUMG> gpreds = [&](int i) {return val<1>{readc[i]>>(CTR-1)};};
-    auto preds = gpreds.fanout(fo<1>{}).append(val<1>{readb>>1}).concat();
+    auto preds = gpreds.fo1().append(val<1>{readb>>1}).concat();
     preds.fanout(fo<2>{});
     // compare tags
-    arr<val<1>,NUMG> tagcmp = [&](int i){return gt[i] == tags[i].fanout(fo<1>{});};
+    arr<val<1>,NUMG> tagcmp = [&](int i){return gt[i] == tags[i].fo1();};
     // find longest match
-    auto match = tagcmp.fanout(fo<1>{}).append(1).concat(); // bimodal is default when no match
+    auto match = tagcmp.fo1().append(1).concat(); // bimodal is default when no match
     match.fanout(fo<2>{});
     match1 = match.priority_encode();
     match1.fanout(fo<8>{});
@@ -185,7 +185,7 @@ struct tage : predictor {
 #ifdef USE_META
     meta.fanout(fo<2>{});
     arr<val<1>,NUMG> weakctr = [&](int i) {return readc[i]==WEAK0 | readc[i]==WEAK1;};
-    newly_alloc = (val<NUMG>(match1) & weakctr.fanout(fo<1>{}).concat() & ~readu.concat()) != 0;
+    newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & ~readu.concat()) != 0;
     newly_alloc.fanout(fo<2>{});
     prediction = select(newly_alloc & val<1>{meta>>(METABITS-1)},pred2,pred1);
 #else
@@ -209,7 +209,7 @@ struct tage : predictor {
     execute(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
 #endif
     auto mispmask = mispred.replicate(fo<NUMG>{}).concat();
-    auto postmask = mispmask.fanout(fo<1>{}) & val<NUMG>(match1-1);
+    auto postmask = mispmask.fo1() & val<NUMG>(match1-1);
     postmask.fanout(fo<2>{});
     auto candallocmask = postmask & ~readu.concat(); // candidate post entries for allocation
     candallocmask.fanout(fo<2>{});
@@ -219,16 +219,17 @@ struct tage : predictor {
     auto collamask1 = collamask.priority_encode();
     collamask1.fanout(fo<2>{});
     auto collamask2 = (collamask^collamask1).priority_encode();
-    auto collamask12 = select(val<2>{rand()}==0, collamask2, collamask1);
-    auto allocmask = collamask12.reverse();
+    auto collamask12 = select(val<2>{rand()}==0, collamask2.fo1(), collamask1);
+    auto allocmask = collamask12.fo1().reverse();
     allocmask.fanout(fo<3>{});
     auto match1_split = match1.make_array(val<1>{});
+    match1_split.fanout(fo<2>{});
     // update the bimodal counter if it provided the prediction
     execute(match1_split[NUMG], [&](){bim.write(bi,update_ctr(readb,dir));});
     // update the global counter if it provided the prediction or is in the allocated entry
     execute(val<NUMG>{match1} | allocmask, [&](u64 i) {
       auto newgctr = select(match1_split[i], update_ctr(readc[i],dir), select(dir,val<CTR>{WEAK1},val<CTR>{WEAK0}));
-      gctr[i].write(gi[i],newgctr);
+      gctr[i].write(gi[i],newgctr.fo1());
     });
     // update the tag in the allocated entry
     execute(allocmask, [&](u64 i){gtag[i].write(gi[i],gt[i]);});
@@ -238,13 +239,12 @@ struct tage : predictor {
     auto umask_split = umask.make_array(val<1>{});
     // if all post entries have the u bit set, reset their u bits
     auto noalloc = (candallocmask == 0);
-    noalloc.fanout(fo<NUMG>{});
-    auto uclearmask = postmask & noalloc.replicate(fo<NUMG>{}).concat();
-    execute(umask | allocmask | uclearmask, [&](u64 i) {
-      ubit[i].write(gi[i],select(umask_split[i],goodpred,val<1>{0}));
+    auto uclearmask = postmask & noalloc.fo1().replicate(fo<NUMG>{}).concat();
+    execute(umask | allocmask | uclearmask.fo1(), [&](u64 i) {
+      ubit[i].write(gi[i],select(umask_split[i].fo1(),goodpred,val<1>{0}));
     });
     // update path history
-    ph.update(concat(val<5>{pc},dir));
+    ph.update(concat(val<5>{pc.fo1()},dir));
   }
   
 };
