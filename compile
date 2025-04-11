@@ -12,7 +12,7 @@ fi
 
 COMPILE="g++ -std=c++20"
 OPT="-O3"
-FLAGS="-Werror -Werror=old-style-cast"
+FLAGS="-Werror=old-style-cast"
 
 set -x
 

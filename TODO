@@ -1,14 +1,15 @@
 * missing hardware models
  - ROM
- - carry-save adder
  - integer multiplier
  - popcount
 
 * missing operations (>, <, >=, <=, *, <<, >>, %, /)
 
+* optimize the priority encoder
+
 * general reduction primitive for class arr
 
-* general scan primitive for class arr (https://en.wikipedia.org/wiki/Prefix_sum)
+* general scan primitive for class arr
 
 * static power
 
@@ -17,7 +18,5 @@
 * user manual
 
 To do eventually (but not priority):
-
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
-
 * floating point

@@ -15,15 +15,14 @@ struct path_history {
   path_history() {}
 
   template<u64 FO>
-  void fanout(fo<FO> x)
+  void fanout(fo<FO>)
   {
     h.fanout(fo<FO>{});
     hr.fanout(fo<FO>{});
   }
 
-  void update(auto in)
+  void update(valtype auto in)
   {
-    constexpr u64 K = in.size;
     if constexpr (N==0) {
       hr = (hr<<1) ^ in.fo1();
     } else {
@@ -117,10 +116,10 @@ struct tage : predictor {
     // geometric history lengths
     // table 0 is the rightmost table and has the longest history    
     std::array<u64,NUMG> hlen;
-    int prevhl = 0;
-    for (int i=0; i<NUMG; i++) {
-      f64 hl = MINHIST * pow(f64(GHIST)/MINHIST,f64(i)/(NUMG-1));
-      hl = max(prevhl+1,hl);
+    u64 prevhl = 0;
+    for (u64 i=0; i<NUMG; i++) {
+      u64 hl = MINHIST * pow(f64(GHIST)/MINHIST,f64(i)/(NUMG-1));
+      hl = std::max(prevhl+1,hl);
       hlen[NUMG-1-i] = hl;
       prevhl = hl;
     }
@@ -133,7 +132,7 @@ struct tage : predictor {
     std::cout << "TAGE bimodal entries: " << NB << std::endl;
     std::cout << "TAGE global entry tag length: " << TAGW << std::endl;
     std::cout << "TAGE history lengths: ";
-    for (int i=0; i<NUMG; i++) std::cout << HLEN[i] << " ";
+    for (u64 i=0; i<NUMG; i++) std::cout << HLEN[i] << " ";
     std::cout << std::endl;
   }
 
@@ -157,7 +156,7 @@ struct tage : predictor {
     arr<val<TAGW>,NUMG> tags = [&](int i){return gtag[i].read(gi[i]);};
     readb = bim.read(bi);
     readb.fanout(fo<2>{});
-    for (int i=0; i<NUMG; i++) {
+    for (u64 i=0; i<NUMG; i++) {
       readc[i] = gctr[i].read(gi[i]);
       readu[i] = ubit[i].read(gi[i]);
     }
@@ -184,7 +183,7 @@ struct tage : predictor {
     pred2.fanout(fo<3>{});
 #ifdef USE_META
     meta.fanout(fo<2>{});
-    arr<val<1>,NUMG> weakctr = [&](int i) {return readc[i]==WEAK0 | readc[i]==WEAK1;};
+    arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==WEAK0) | (readc[i]==WEAK1);};
     newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & ~readu.concat()) != 0;
     newly_alloc.fanout(fo<2>{});
     prediction = select(newly_alloc & val<1>{meta>>(METABITS-1)},pred2,pred1);

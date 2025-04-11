@@ -85,9 +85,68 @@ namespace hcm {
   template<typename T>
   concept memdatatype = (valtype<T> || arrtype<T>) && ! regtype<T> && ! regtype<typename T::type>;
 
+  template <typename T>
+  concept standard_integral = std::integral<T> && ! std::same_as<T,char> && ! std::same_as<T,char8_t> && ! std::same_as<T,char16_t> && ! std::same_as<T,char32_t> && ! std::same_as<T,wchar_t> && ! std::same_as<T,bool>;
+  
+  template<typename T, typename U>
+  bool is_equal(T x, U y)
+  {
+    if constexpr (standard_integral<T> && standard_integral<U>) {
+      return std::cmp_equal(x,y);
+    } else {
+      return x == y;
+    }
+  }
 
-  constexpr auto min(auto a, auto b) {return (b<a)? b : a;}
-  constexpr auto max(auto a, auto b) {return (b>a)? b : a;}  
+  template<typename T, typename U>
+  bool is_different(T x, U y)
+  {
+     if constexpr (standard_integral<T> && standard_integral<U>) {
+      return std::cmp_not_equal(x,y);
+    } else {
+      return x != y;
+    }   
+  }
+  
+  template<typename T, typename U>
+  bool is_less(T x, U y)
+  {
+    if constexpr (standard_integral<T> && standard_integral<U>) {
+      return std::cmp_less(x,y);
+    } else {
+      return x < y;
+    }
+  }
+
+  template<typename T, typename U>
+  bool is_greater(T x, U y)
+  {
+    if constexpr (standard_integral<T> && standard_integral<U>) {
+      return std::cmp_greater(x,y);
+    } else {
+      return x > y;
+    }    
+  }
+
+  template<typename T, typename U>
+  bool is_less_equal(T x, U y)
+  {
+    if constexpr (standard_integral<T> && standard_integral<U>) {
+      return std::cmp_less_equal(x,y);
+    } else {
+      return x <= y;
+    }
+  }
+
+  template<typename T, typename U>
+  bool is_greater_equal(T x, U y)
+  {
+    if constexpr (standard_integral<T> && standard_integral<U>) {
+      return std::cmp_greater_equal(x,y);
+    } else {
+      return x >= y;
+    }
+  }  
 
   constexpr auto to_unsigned(std::integral auto x) {return std::make_unsigned_t<decltype(x)>(x);}
   constexpr inline auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
@@ -125,7 +184,7 @@ namespace hcm {
     u8 y = x&1;
     for (int i=1; i<8; i++) {
       x >>= 1;
-      y = (y<<1) | x&1;
+      y = (y<<1) | (x&1);
     }
     return y;
   }
@@ -145,7 +204,7 @@ namespace hcm {
       return x;
     } else {
       T y = reversed_byte[x & 0xFF];
-      for (int i=1; i<sizeof(T); i++) {
+      for (u64 i=1; i<sizeof(T); i++) {
 	x >>= 8;
 	y = (y<<8) | reversed_byte[x & 0xFF];
       }
@@ -432,8 +491,8 @@ namespace hcm {
       // parallel, distinct inputs
       circuit para;
       para.t = t + x.t;
-      para.d = max(d,x.d);
-      para.ci = max(ci,x.ci);
+      para.d = std::max(d,x.d);
+      para.ci = std::max(ci,x.ci);
       para.cg = cg + x.cg;
       para.e = e + x.e;
       para.w = w + x.w;
@@ -445,7 +504,7 @@ namespace hcm {
       // parallel, single input
       circuit para;
       para.t = t + x.t;
-      para.d = max(d,x.d);
+      para.d = std::max(d,x.d);
       para.ci = ci + x.ci;
       para.cg = cg + x.cg;
       para.e = e + x.e;
@@ -518,12 +577,16 @@ namespace hcm {
     constexpr nor(u64 n) : basic_gate(2*n,{1+n*GAMMA},n+n*GAMMA,n*(1+n*GAMMA)) {assert(n>=1);}
   };
 
-  struct and_nor /*aka AOI21*/: basic_gate { // ~(a|(b&c))
+  struct and_nor /*aka AOI21*/: basic_gate { // ~(a+bc)
     constexpr and_nor() : basic_gate(6,{1+2*GAMMA/*a*/,2+2*GAMMA/*b*/,2+2*GAMMA/*c*/},3+2*GAMMA,5+6*GAMMA) {}
   };
 
-  struct or_nand /*aka OAI21*/: basic_gate { // ~(a&(b|c))
+  struct or_nand /*aka OAI21*/: basic_gate { // ~(a(b+c))
     constexpr or_nand() : basic_gate(6,{2+GAMMA/*a*/,2+2*GAMMA/*b*/,2+2*GAMMA/*c*/},2+3*GAMMA,6+5*GAMMA) {}
+  };
+
+  struct and2_nor /*aka AOI22*/ : basic_gate { // ~(ab+cd)
+    constexpr and2_nor() : basic_gate(8,{INVCAP},4+4*GAMMA,8+8*GAMMA) {}
   };
 
   struct mux_inv_tri : basic_gate { // inverting MUX (tristate inverters)
@@ -539,14 +602,14 @@ namespace hcm {
   };
 
   using xnor_cpl = xor_cpl; // a,~a,b,~b ==> ~(a^b)
-  
+
 
   template<f64 STAGE_EFFORT=DSE>
   constexpr u64 num_stages(f64 path_effort, bool odd=false)
   {
     // higher stage effort increases delay but reduces energy
     assert(path_effort>=1);
-    u64 n = log(path_effort) / log(STAGE_EFFORT);
+    i64 n = log(path_effort) / log(STAGE_EFFORT);
     assert(n>=0);
     n += (n & 1) ^ odd;
     return n;
@@ -556,13 +619,13 @@ namespace hcm {
   constexpr circuit buffer(f64 co, bool cpl, f64 scale=1, f64 bias=0.5)
   {
     f64 ci = inv{}.icap(scale);
-    f64 fo = min(max(1,co/ci),SMAX);
+    f64 fo = std::min(std::max(1.,co/ci),f64(SMAX));
     u64 ninv = num_stages<SE>(fo,cpl);
     circuit buf;
     if (ninv!=0) {
       f64 foi = pow(fo,1./ninv);
       assert(foi>=1);
-      for (int i=0; i<ninv; i++) {
+      for (u64 i=0; i<ninv; i++) {
 	ci *= foi;
 	buf = buf + inv{}.make((i==(ninv-1))? co:ci,scale,bias);
 	scale *= foi;
@@ -589,15 +652,15 @@ namespace hcm {
     f64 linearcap = METALCAP + ((dload)? (cload/length) : 0); // CGATE/um
     f64 seglen = sqrt(2*REFF*INVCAP*(1+PINV) / (linearcap*METALRES[L])); // um
     f64 optinvscale = sqrt(REFF * linearcap / (INVCAP * METALRES[L]));
-    f64 invscale = min(SMAX,optinvscale); // inverter scale
-    u64 nseg = max(1, llround(length / seglen)); // number of segments
+    f64 invscale = std::min(f64(SMAX),optinvscale); // inverter scale
+    u64 nseg = std::max(u64(1), u64(llround(length/seglen))); // number of segments
     seglen = length / nseg; // segment length (um)
     f64 cseg = linearcap * seglen; // wire segment capacitance relative to CGATE
     // transistors:
     f64 cfirst = cseg + ((nseg==1)? co : 0);
     circuit c = buffer<SE,SMAX>(cfirst,(nseg-1+cpl)&1,1,bias);
     circuit rep = inv{}.make(cseg,invscale,bias); // repeater = inverter
-    for (int i=1; i<(nseg-1); i++) c = c + rep;
+    for (u64 i=1; i<(nseg-1); i++) c = c + rep;
     if (nseg>1) c = c + inv{}.make(cseg+co,invscale,bias); // last segment drives output cap
     // wire:
     c.w = length;
@@ -633,35 +696,19 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit majority_nand3(f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit majority(f64 co, f64 scale=1, f64 bias=0.5)
   {
-    // a,b,c ==> ab+ac+bc = ~(~(ab)~(ac)~(bc))
-    circuit na3 = nand{3}.make(co,scale,bias);
-    circuit na = nand{2}.make(na3.ci,scale,bias);
-    return ((na | na) || na) + na3;
-  }
-
-
-  inline constexpr circuit majority_aoi21(f64 co, f64 scale=1, f64 bias=0.5)
-  {
-    // a,b,c ==> ab+ac+bc = ~(~(b+c)|(~a&~(bc)))
-    and_nor gate;
-    f64 c1 = gate.icap<0>(scale);
-    f64 c2 = gate.icap<1>(scale);
+    // a,b,c ==> ab+ac+bc = ~(~(b+c)+(~a~(bc)))
+    and_nor aoi;
+    f64 c1 = aoi.icap<0>(scale);
+    f64 c2 = aoi.icap<1>(scale);
     circuit i = inv{}.make(c2,scale,bias);
     circuit na = nand{2}.make(c2,scale,bias);
     circuit no = nor{2}.make(c1,scale,bias);
-    circuit maj = ((na | no) || i) + gate.make(co,scale,bias); // TODO: and_nor inputs bias
-    return maj;
+    return ((na | no) || i) + aoi.make(co,scale,bias); // TODO: and_nor inputs bias
   }
 
 
-  inline constexpr circuit majority(f64 co, f64 scale=1, f64 bias=0.5)
-  {
-    return majority_aoi21(co,scale,bias);
-  }
-
-  
   template<f64 SE=DSE, u64 SMAX=DSMAX, u64 ARITY=4>
   constexpr circuit nand_nor_tree(u64 n, bool nandfirst, bool cpl, f64 co, f64 scale=1, f64 bias=0.5)
   {
@@ -670,14 +717,14 @@ namespace hcm {
     if (n==0) return {};
     if (n==1) return (cpl)? inv{}.make(co,scale,bias) : circuit{};
     basic_gate gate[2][ARITY+1];
-    for (int i=1; i<=ARITY; i++) {
+    for (u64 i=1; i<=ARITY; i++) {
       gate[0][i] = nor(i);
       gate[1][i] = nand(i);
     }
     u64 ngates[2][ARITY+1];
 
     auto partition = [] (u64 n) {
-      u64 w = min(n,ARITY);
+      u64 w = std::min(n,ARITY);
       u64 r = n%w;
       u64 nw = n/w;
       if (r!=0) {
@@ -718,8 +765,8 @@ namespace hcm {
     bool nand_stage = nandfirst;
     u64 width = populate_gates(nand_stage,n);
     f64 ci = gate[nand_stage][width].icap(scale);
-    f64 fanout = min(co/ci,SMAX);
-    u64 path_effort = max(1,path_logical_effort(n)*fanout);
+    f64 fanout = std::min(co/ci,f64(SMAX));
+    u64 path_effort = std::max(1.,path_logical_effort(n)*fanout);
     u64 depth_target = num_stages<SE>(path_effort);
     u64 depth = llround(ceil(log(n)/log(ARITY)));
     bool extra_inv = (depth & 1) ^ cpl; // odd number of stages if cpl=true, even otherwise
@@ -743,7 +790,7 @@ namespace hcm {
       u64 prev_width = width;
       width = populate_gates(nand_stage^1,n);
       f64 next_le = (width!=0)? gate[nand_stage^1][width].logical_effort() : 1;
-      f64 next_scale = max(1,scale * stage_effort / next_le);
+      f64 next_scale = std::max(1.,scale * stage_effort / next_le);
       f64 cload = (width!=0)? gate[nand_stage^1][width].icap(next_scale) : (depth>1)? inv{}.icap(next_scale) : co;
       circuit stage;
       for (u64 w=1; w<=ARITY; w++) {
@@ -759,7 +806,7 @@ namespace hcm {
     
     if (ninv!=0) {
       // add inverters
-      for (int i=0; i<ninv; i++) {
+      for (u64 i=0; i<ninv; i++) {
 	f64 next_scale = scale * stage_effort;
 	f64 cload = (depth>1)? inv{}.icap(next_scale) : co;
 	tree = tree + inv{}.make(cload,scale,bias);
@@ -805,18 +852,23 @@ namespace hcm {
     circuit x = xor_cpl{}.make(co,scale,bias);
     circuit i = inv{}.make(x.ci,scale,bias);
     circuit c = i*2+x;
-    c.ci = i.ci + x.ci;
+    c.ci = i.ci + x.ci; // 6 CGATE 
     return c;
   }
 
-  
+
   inline constexpr circuit xnor2(f64 co, f64 scale=1, f64 bias=0.5)
   {
-    return xor2(co,scale,bias);
-  }  
+    // ~(a^b) = ~(~(ab)(a+b)) slightly faster than xor2
+    or_nand oai;
+    circuit nandab = nand{2}.make(oai.icap<0>(scale),scale,bias);
+    circuit c = nandab + oai.make(co,scale,bias);
+    c.ci += oai.icap<1>(scale); // 7 CGATE
+    return c;
+  }
 
-  
-  inline constexpr circuit parity_small(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
+
+  inline constexpr circuit parity(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     // XOR tree
     if (n<=1) return {};
@@ -834,33 +886,6 @@ namespace hcm {
       bias = 2*bias*(1-bias);
     }
     return tree;
-  }
-
-  
-  inline constexpr circuit parity_fast(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
-  {
-    // XOR/XNOR tree
-    if (n<=1) return {};
-    f64 ci = xor_cpl{}.icap(scale) + xnor_cpl{}.icap(scale);
-    circuit tree = inv{}.make(ci,scale,bias) * n;
-    tree.ci += ci;
-    while (n>1) {
-      if (n==2) {
-	// last stage
-	tree = tree + xor_cpl{}.make(co,scale,bias);
-      } else {
-	tree = tree + (xor_cpl{}.make(ci,scale,bias) | xnor_cpl{}.make(ci,scale,bias)) * (n/2);
-      }
-      n -= n/2;
-      bias = 2*bias*(1-bias);
-    }
-    return tree;
-  }
-
-  
-  inline constexpr circuit parity(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
-  {
-    return parity_small(n,co,scale,bias);
   }
 
 
@@ -953,7 +978,7 @@ namespace hcm {
 	assert(w>2);
 	f64 selcap = muxi.icap<1>() * nmuxes * m;
 	f64 cselcap = muxi.icap<2>() * nmuxes * m;
-	circuit sel = buffer<SE,SMAX>(selcap,true) | buffer<SE,SMAX>(selcap,false);
+	circuit sel = buffer<SE,SMAX>(selcap,false) | buffer<SE,SMAX>(cselcap,true);
 	return decode1<SE,SMAX>(w,sel.ci) + sel * w;
       }
     };
@@ -1161,9 +1186,19 @@ namespace hcm {
   constexpr circuit half_adder(f64 co)
   {
     if constexpr (INCR) {
-      return inv{}.make(co); // a+1
+      // a+1
+      circuit c = inv{}.make(co);
+      c.ci += co;
+      return c;
     } else {
-      return xor2(co) | anding(2,co); // a+b
+       // a+b
+      circuit x = xor_cpl{}.make(co); // sum
+      circuit n = nor{2}.make(co); // carry out
+      circuit c = x|n;
+      circuit i = inv{}.make(c.ci);
+      c = i*2 + c;
+      c.ci += x.ci;
+      return c;
     }
   }
 
@@ -1171,37 +1206,57 @@ namespace hcm {
   template<bool INCR=false>
   constexpr circuit full_adder(f64 co)
   {
+    // implemented with small input capacitance; faster circuits exist (TODO)
+    // (circuit with large input cap may seem fast, but delay of previous stage increases)
     if constexpr (INCR) {
-      return half_adder(co); // a+1+carry
+      // a+b+1
+      // sum = a^~b = ~(~a^~b)
+      // carry = a+b = ~(~a~b)
+      circuit x = xnor2(co); // sum
+      circuit n = nand{2}.make(co); // carry
+      circuit xn = x|n;
+      circuit i = inv{}.make(xn.ci); // ~a, ~b
+      return i*2 + xn;
     } else {
-      return parity(3,co) | majority(co); // a+b+carry
+      // a+b+c
+      // x = ~(abc), y=~(a+b+c), z=ab+ac+bc (carry)
+      // sum = a^b^c = ~(x(y+z))
+      or_nand oai;
+      f64 c1 = oai.icap<0>();
+      f64 c2 = oai.icap<1>();
+      circuit x = nand{3}.make(c1);
+      circuit y = nor{3}.make(c2);
+      circuit z = majority(c2+co); // carry out
+      circuit s = oai.make(co); // sum
+      circuit fa = (x|y|z)+s; // large input capacitance, need a buffer
+      return buffer(fa.ci,false) + fa;
     }
   }
 
 
-  template<u64 N, bool INCR=false, bool CARRYIN=false>
-  constexpr circuit adder_ks(f64 co)
+  template<bool INCR=false, bool CARRYIN=false>
+  constexpr circuit adder_ks(u64 n, f64 co)
   {
     // Kogge-Stone adder (radix-2)
-    // TODO: wire capacitance
-    static_assert(N!=0);
-    if constexpr (N==1) {
+    // wire capacitance not modeled (TODO?)
+    assert(n!=0);
+    if (n==1) {
       return (CARRYIN)? full_adder<INCR>(co) : half_adder<INCR>(co);
     }
-    constexpr u64 depth = std::bit_width(N-1);
+    u64 depth = std::bit_width(n-1);
     basic_gate G[2] = {or_nand{},and_nor{}}; // inverting generate gate
     basic_gate P[2] = {nor{2},nand{2}}; // inverting propagate gate
-    circuit sum = xor2(co) * (N-(CARRYIN^1)); // final sum
-    circuit bws = (INCR)? circuit{} : xor2(sum.ci) * N; // bitwise sum (xnor for even depth, same circuit)
+    circuit sum = xor2(co) * (n-(CARRYIN^1)); // final sum
+    circuit bws = (INCR)? circuit{} : xor2(sum.ci) * n; // bitwise sum (FIXME: xnor for even depth)
     circuit bwg; // bitwise generate
     circuit bwp; // bitwise propagate
     if constexpr (! INCR) {
-      if constexpr (N==2) {
-	bwg = nand{2}.make(G[0].icap<1>()+sum.ci) * N;
-	bwp = nor{2}.make(G[0].icap<1>()+sum.ci) * (N-1);
+      if (n==2) {
+	bwg = nand{2}.make(G[0].icap<1>()+sum.ci) * n;
+	bwp = nor{2}.make(G[0].icap<1>()+sum.ci) * (n-1);
       } else {
-	bwg = nand{2}.make(G[0].icap<0>()+G[0].icap<1>()) * N;
-	bwp = nor{2}.make(G[0].icap<1>()+2*P[0].icap()) * (N-1);
+	bwg = nand{2}.make(G[0].icap<0>()+G[0].icap<1>()) * n;
+	bwp = nor{2}.make(G[0].icap<1>()+2*P[0].icap()) * (n-1);
       }
     }
     circuit carryout;
@@ -1211,13 +1266,13 @@ namespace hcm {
       carryout = inv{}.make(co);
     }
     circuit tree = bwp | bwg;
-    for (int i=0; i<depth; i++) {
+    for (u64 i=0; i<depth; i++) {
       u64 nd = 1<<i; // generate bits already calculated
-      u64 ng = N-nd; // G cells
-      u64 np = N-min(N,2*nd); // P cells
-      u64 n2 = N-min(N,3*nd); // cells with 2 consumers
+      u64 ng = n-nd; // G cells
+      u64 np = n-std::min(n,2*nd); // P cells
+      u64 n2 = n-std::min(n,3*nd); // cells with 2 consumers
       u64 n1 = ng - n2; // cells with single consumer
-      u64 np1 = min(n1,np); // P cells with single consumer
+      u64 np1 = std::min(n1,np); // P cells with single consumer
       if (i < (depth-1)) {
 	f64 cog1 = G[(i+1)&1].icap<0>();
 	f64 cog2 = G[(i+1)&1].icap<0>() + G[(i+1)&1].icap<1>();
@@ -1232,10 +1287,69 @@ namespace hcm {
 	f64 cog1 = (n1==1)? carryout.ci : sum.ci;
 	tree = tree + G[i&1].make(cog1) * n1;
       }
-    } 
-    return (tree | bws) + (sum || carryout);
+    }
+    circuit adder = (tree | bws) + (sum || carryout); // large input capacitance (12 CGATE)
+    return buffer(adder.ci,false) * n + adder;
   }
 
+
+  constexpr circuit csa(const std::vector<u64> &icount, f64 co)
+  {
+    // carry-save adder
+    // n=number of columns, icount vector = number of bits per column (not necessarily uniform)
+    u64 n = icount.size();
+    assert(n!=0);
+    u64 cmax = *std::max_element(icount.begin(),icount.end());
+    assert(cmax>=2);
+    if (cmax == 2) {
+      // stop here
+      for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim
+      for (auto it=icount.rbegin(); it!=icount.rend() && *it==0; ++it) n--; // left trim
+      return adder_ks(n,co); // do carry propagate
+    }
+    // CSA reduction tree
+    assert(cmax>=3);
+    bool final_stage = icount[0] <= 3;
+    for (u64 i=1; final_stage && i<n; i++) {
+      if ((icount[i]!=0 || icount[i-1]>3) && (icount[i]>3 || icount[i-1]>1))
+	final_stage = false;
+    }
+    bool last_csa = icount[0] <= 6;
+    for (u64 i=1; last_csa && i<n; i++) {
+      if ((icount[i]>3 || icount[i-1]>3) && (icount[i]>6 || icount[i-1]>1))
+	last_csa = false;
+    }
+    assert(!final_stage || last_csa);
+    std::vector<u64> ocount;
+    ocount.resize(n+1);
+    constexpr f64 facap = full_adder(INVCAP).ci;
+    constexpr f64 cpacap = adder_ks(2,INVCAP).ci;
+    f64 loadcap = (final_stage)? co : (last_csa)? cpacap : facap;
+    circuit fa = full_adder(loadcap);
+    circuit ha = half_adder(loadcap);
+    circuit stage;
+    for (u64 i=0; i<n; i++) {
+      u64 n3 = icount[i]/3;
+      u64 n2 = (icount[i]%3 == 2)? 1:0;
+      u64 n1 = (icount[i]%3 == 1)? 1:0;
+      if (icount[i] == 4) {
+	// use two HAs
+	n3 = n1 = 0;
+	n2 = 2;
+      }
+      stage = stage || fa*n3 || ha*n2;
+      ocount[i] += n3+n2+n1;
+      ocount[i+1] += n3+n2;
+    }
+    cmax = *std::max_element(ocount.begin(),ocount.end());
+    if (cmax == 1) {
+      assert(final_stage);
+      return stage;
+    } else {
+      assert(!final_stage);
+      return stage + csa(ocount,co);
+    }
+  }
 
 
   // ###########################
@@ -1335,7 +1449,7 @@ namespace hcm {
     // single R/W port, N wordlines, M cells per wordline
     // D = data width, M multiple of D, M/D power of 2
     static_assert(N!=0 && D!=0);
-    static_assert((M%D)==0);
+    static_assert(M%D==0);
     static_assert(std::has_single_bit(M/D));
     
     // TODO: precharge circuit
@@ -1366,7 +1480,7 @@ namespace hcm {
     //   * SA offset voltage follows Pelgrom's square-root law (Pileggi, CICC 2008)
     //   * bitline swing proportional to SA offset voltage (Abu-Rahma, CICC 2011)
     // ==> bitline swing inversely proportional to sqrt of SA input capacitance Csa (Kim, IEEE JSSC april 2023)
-    static constexpr f64 SACAP = max(SACAPMIN,min(SACAPMAX,N*BLCAP*XCSA)); // sense amp capacitance relative to CGATE
+    static constexpr f64 SACAP = std::max(SACAPMIN,std::min(SACAPMAX,N*BLCAP*XCSA)); // sense amp capacitance relative to CGATE
     static constexpr f64 SACAP_pF = SACAP * CGATE_pF;
     static constexpr f64 SASCALE = SACAP/SACAPMIN;
     static_assert(SASCALE>=1);
@@ -1469,7 +1583,7 @@ namespace hcm {
 
     static constexpr f64 read_latency()
     {
-      return max(WLSEL.d + WLRC + BLDELAY + SADELAY, CMUX[0].d) + CMUX[1].d; // ps
+      return std::max(WLSEL.d + WLRC + BLDELAY + SADELAY, CMUX[0].d) + CMUX[1].d; // ps
     }
 
     static constexpr f64 read_energy()
@@ -1619,8 +1733,8 @@ namespace hcm {
     bool ok = E!=0 && D!=0; // mandatory
     ok = ok && std::has_single_bit(MAXN); // mandatory: MAXN must be a power of 2
     // prune off configs that are likely bad
-    u64 banksize = MAXN * max(D,MAXM);
-    ok = ok && (16*E*D <= banksize*banksize || MAXN>=1024 && MAXM>=512);
+    u64 banksize = MAXN * std::max(D,MAXM);
+    ok = ok && (16*E*D <= banksize*banksize || (MAXN>=1024 && MAXM>=512));
     return ok;
   }
   
@@ -1639,7 +1753,7 @@ namespace hcm {
       static_assert(R>=N);
       static_assert(W>=MAXM/2);
       constexpr f64 BIAR = f64(N) / (W*SRAM_CELL.aspect_ratio); // bank inverse aspect ratio
-      constexpr f64 FACTOR = max(2,BIAR*BIAR);
+      constexpr f64 FACTOR = std::max(2.,BIAR*BIAR);
       static_assert(FACTOR>=1);
       if constexpr (R <= W * SRAM_CELL.aspect_ratio * FACTOR) {
 	// single column
@@ -1650,7 +1764,7 @@ namespace hcm {
 	constexpr f64 S = sqrt(R*W*SRAM_CELL.aspect_ratio); // square side
 	static_assert(S>=N);
 	static_assert(S<=R);
-	constexpr u64 BY = min(to_pow2(S/N),std::bit_floor(R/N));
+	constexpr u64 BY = std::min(to_pow2(S/N),std::bit_floor(R/N));
 	static_assert(BY>=1 && std::has_single_bit(BY));
 	constexpr u64 BX = (R+BY*N-1)/(BY*N);
 	static_assert(BX>=1);
@@ -1794,13 +1908,13 @@ namespace hcm {
   inline constexpr circuit XNOR = XOR<N>;
   
   template<u64 WIDTH>
-  inline constexpr circuit ADD = adder_ks<WIDTH,false,false>(OUTCAP);
+  inline constexpr circuit ADD = adder_ks<false,false>(WIDTH,OUTCAP);
 
   template<u64 WIDTH>
-  inline constexpr circuit INC = adder_ks<WIDTH,true,true>(OUTCAP);
+  inline constexpr circuit INC = adder_ks<true,true>(WIDTH,OUTCAP);
 
   template<u64 WIDTH>
-  inline constexpr circuit SUB = adder_ks<WIDTH,false,true>(OUTCAP);
+  inline constexpr circuit SUB = adder_ks<false,true>(WIDTH,OUTCAP);
   
   template<u64 N>
   inline constexpr circuit EQUAL = xnor2(AND<N>.ci) * N + AND<N>;
@@ -2093,7 +2207,7 @@ namespace hcm {
 	read_credit--;
       } else {
 #ifdef CHECK_FANOUT
-	assert(("fanout exhausted",read_credit!=0));
+	assert(read_credit!=0 && "fanout exhausted");
 #else
 	// fanout exhausted: delay increases linearly with the number of reads
 	// delay increment is that of a FO2 inverter (wires not modeled, TODO?)	
@@ -2165,7 +2279,7 @@ namespace hcm {
 
     u64 time() const
     {
-      return max(exec.time,timing);
+      return std::max(exec.time,timing);
     }
 
     static constexpr T maxval = []() {
@@ -2438,7 +2552,7 @@ namespace hcm {
       } else {
 	auto [v1,t1] = std::forward<T1>(x1).get_vt();
 	auto [v2,t2] = std::forward<T2>(x2).get_vt();
-	return rtype {(v1 << x2.size) | v2, max(t1,t2)};
+	return rtype {(v1 << x2.size) | v2, std::max(t1,t2)};
       }
     }
 
@@ -2601,7 +2715,7 @@ namespace hcm {
 
     void create()
     {
-      assert(("all storage (reg,ram) must have the same lifetime",!panel.storage_destroyed));
+      assert(!panel.storage_destroyed && "all storage (reg,ram) must have the same lifetime");
       panel.update_storage(N,stg::xtors);
     }
 
@@ -2633,7 +2747,7 @@ namespace hcm {
     template<typename U>
     void assign(U &&other)
     {
-      assert(("single register write per cycle",panel.cycle>last_write_cycle));
+      assert(panel.cycle>last_write_cycle && "single register write per cycle");
       last_write_cycle = panel.cycle;     
       val<N,T>::operator=(std::forward<U>(other));
       panel.update_energy(stg::write_energy_fJ);
@@ -2709,7 +2823,7 @@ namespace hcm {
     auto get() && // rvalue
     {
       std::array<atype,N> b;
-      for (int i=0; i<N; i++) b[i] = std::move(elem[i]).get();
+      for (u64 i=0; i<N; i++) b[i] = std::move(elem[i]).get();
       return b;
     }
 
@@ -2724,7 +2838,7 @@ namespace hcm {
     {
       u64 t = 0;
       for (u64 i=0; i<N; i++) {
-	t = max(t,elem[i].time());
+	t = std::max(t,elem[i].time());
       }
       return t;
     }
@@ -2809,7 +2923,7 @@ namespace hcm {
 	auto [i,ti] = std::forward<U>(index).get_vt();
 	assert(i<N);
 	auto [d,td] = elem[i].get_vt(); // lvalue
-	auto t = max(ti+c[0].delay(),td) + c[1].delay();
+	auto t = std::max(ti+c[0].delay(),td) + c[1].delay();
 	return {d,t};
       } else {
 	static_assert(N==1);
@@ -3218,21 +3332,21 @@ namespace hcm {
     template<ival TYPEA, std::convertible_to<T> TYPED>
     void write(TYPEA && address, TYPED && dataval)
     {
-      assert(("single RAM write per cycle",panel.cycle>last_write_cycle));
+      assert(panel.cycle>last_write_cycle && "single RAM write per cycle");
       last_write_cycle = panel.cycle;
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
       auto [av,at] = proxy::get_vt(std::forward<TYPEA>(address));
       auto dv = proxy::get(std::forward<TYPED>(dataval));
       auto dt = proxy::time(dataval);
-      writes.push_back({u64(av),valuetype(dv),max(at,dt)});
+      writes.push_back({u64(av),valuetype(dv),std::max(at,dt)});
       std::push_heap(writes.begin(),writes.end());
     }
 
     template<ival U>
     T read(U && address)
     {
-      assert(("single RAM read per cycle",panel.cycle>last_read_cycle));
+      assert(panel.cycle>last_read_cycle && "single RAM read per cycle");
       last_read_cycle = panel.cycle;
       if (! exec.active) return {};
       panel.update_energy(static_ram::EREAD);
@@ -3308,7 +3422,7 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1==v2, max(t1,t2)+c.delay()};
+    return {is_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
@@ -3318,7 +3432,7 @@ namespace hcm {
     circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1==x2, t1+c.delay()};
+    return {is_equal(v1,x2), t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3336,7 +3450,7 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1!=v2, max(t1,t2)+c.delay()};
+    return {is_different(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
@@ -3346,7 +3460,7 @@ namespace hcm {
     circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1!=x2, t1+c.delay()};
+    return {is_different(v1,x2), t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3362,7 +3476,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1>v2, max(t1,t2)};
+    return {is_greater(v1,v2), std::max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
@@ -3370,7 +3484,7 @@ namespace hcm {
   {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1>x2, t1};
+    return {is_greater(v1,x2), t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3386,7 +3500,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1<v2, max(t1,t2)};
+    return {is_less(v1,v2), std::max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
@@ -3394,7 +3508,7 @@ namespace hcm {
   {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1<x2, t1};
+    return {is_less(v1,x2), t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3410,7 +3524,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1>=v2, max(t1,t2)};
+    return {is_greater_equal(v1,v2), std::max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
@@ -3418,7 +3532,7 @@ namespace hcm {
   {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1>=x2, t1};
+    return {is_greater_equal(v1,x2), t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3434,7 +3548,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1<=v2, max(t1,t2)};
+    return {is_less_equal(v1,v2), std::max(t1,t2)};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
@@ -3442,7 +3556,7 @@ namespace hcm {
   {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1<=x2, t1};
+    return {is_less_equal(v1,x2), t1};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3459,7 +3573,7 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1+v2, max(t1,t2)+c.delay()};
+    return {v1+v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
@@ -3496,7 +3610,7 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1-v2, max(t1,t2)+c.delay()};
+    return {v1-v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
@@ -3526,7 +3640,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1<<v2, max(t1,t2)};
+    return {v1<<v2, std::max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>)
@@ -3544,7 +3658,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1>>v2, max(t1,t2)};
+    return {v1>>v2, std::max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>)
@@ -3562,7 +3676,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1*v2, max(t1,t2)};
+    return {v1*v2, std::max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
@@ -3586,7 +3700,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1/v2, max(t1,t2)};
+    return {v1/v2, std::max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // divisor is a constant
@@ -3604,7 +3718,7 @@ namespace hcm {
     // TODO
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1%v2, max(t1,t2)};
+    return {v1%v2, std::max(t1,t2)};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // modulus is a constant
@@ -3619,11 +3733,11 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator& (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = AND<2> * min(valt<T1>::size,valt<T2>::size);
+    static constexpr circuit c = AND<2> * std::min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1&v2, max(t1,t2)+c.delay()};
+    return {v1&v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> // second argument is constant
@@ -3645,11 +3759,11 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator| (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = OR<2> * min(valt<T1>::size,valt<T2>::size);
+    static constexpr circuit c = OR<2> * std::min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1|v2, max(t1,t2)+c.delay()};
+    return {v1|v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> // second argument is constant
@@ -3671,11 +3785,11 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator^ (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = XOR<2> * min(valt<T1>::size,valt<T2>::size);
+    static constexpr circuit c = XOR<2> * std::min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1^v2, max(t1,t2)+c.delay()};
+    return {v1^v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> // second argument is constant
