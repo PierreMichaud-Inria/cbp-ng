@@ -1302,51 +1302,45 @@ namespace hcm {
     u64 cmax = *std::max_element(icount.begin(),icount.end());
     assert(cmax>=2);
     if (cmax == 2) {
-      // stop here
-      for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim
+     for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim         
       for (auto it=icount.rbegin(); it!=icount.rend() && *it==0; ++it) n--; // left trim
-      return adder_ks(n,co); // do carry propagate
+      return adder_ks(n,co); // do carry propagate, addition is done
     }
     // CSA reduction tree
     assert(cmax>=3);
-    bool final_stage = icount[0] <= 3;
-    for (u64 i=1; final_stage && i<n; i++) {
-      if ((icount[i]!=0 || icount[i-1]>3) && (icount[i]>3 || icount[i-1]>1))
-	final_stage = false;
-    }
-    bool last_csa = icount[0] <= 6;
-    for (u64 i=1; last_csa && i<n; i++) {
-      if ((icount[i]>3 || icount[i-1]>3) && (icount[i]>6 || icount[i-1]>1))
-	last_csa = false;
-    }
-    assert(!final_stage || last_csa);
+    std::vector<u64> n3;
+    std::vector<u64> n2;
     std::vector<u64> ocount;
+    n3.resize(n+1);
+    n2.resize(n+1);
     ocount.resize(n+1);
+    for (u64 i=0; i<n; i++) {
+      u64 r = 0;
+      if (icount[i]==4 && icount[i+1]==0) {
+	n3[i] = 0;
+	n2[i] = 2;
+	r = 0;
+      } else {
+	n3[i] = icount[i]/3;
+	n2[i] = 0;
+	r = icount[i]%3;
+      }
+      ocount[i] += n3[i]+n2[i]+r;
+      ocount[i+1] += n3[i]+n2[i];
+    }
+    cmax = *std::max_element(ocount.begin(),ocount.end());
     constexpr f64 facap = full_adder(INVCAP).ci;
     constexpr f64 cpacap = adder_ks(2,INVCAP).ci;
-    f64 loadcap = (final_stage)? co : (last_csa)? cpacap : facap;
+    f64 loadcap = (cmax==1)? co : (cmax==2)? cpacap : facap;
     circuit fa = full_adder(loadcap);
     circuit ha = half_adder(loadcap);
     circuit stage;
     for (u64 i=0; i<n; i++) {
-      u64 n3 = icount[i]/3;
-      u64 n2 = (icount[i]%3 == 2)? 1:0;
-      u64 n1 = (icount[i]%3 == 1)? 1:0;
-      if (icount[i] == 4) {
-	// use two HAs
-	n3 = n1 = 0;
-	n2 = 2;
-      }
-      stage = stage || fa*n3 || ha*n2;
-      ocount[i] += n3+n2+n1;
-      ocount[i+1] += n3+n2;
+      stage = stage || fa*n3[i] || ha*n2[i];
     }
-    cmax = *std::max_element(ocount.begin(),ocount.end());
     if (cmax == 1) {
-      assert(final_stage);
-      return stage;
+      return stage; // addition is done
     } else {
-      assert(!final_stage);
       return stage + csa(ocount,co);
     }
   }
