@@ -1228,8 +1228,8 @@ namespace hcm {
       circuit y = nor{3}.make(c2);
       circuit z = majority(c2+co); // carry out
       circuit s = oai.make(co); // sum
-      circuit fa = (x|y|z)+s; // large input capacitance, need a buffer
-      return buffer(fa.ci,false) + fa;
+      circuit fa = (x|y|z)+s; // large input capacitance, need buffering
+      return buffer(fa.ci,false) * 3 + fa;
     }
   }
 
@@ -1288,25 +1288,28 @@ namespace hcm {
 	tree = tree + G[i&1].make(cog1) * n1;
       }
     }
-    circuit adder = (tree | bws) + (sum || carryout); // large input capacitance (12 CGATE)
-    return buffer(adder.ci,false) * n + adder;
+    circuit adder = (tree | bws) + (sum || carryout); // large input capacitance, need buffering
+    return buffer(adder.ci,false) * (2*n) + adder;
   }
 
 
   constexpr circuit csa(const std::vector<u64> &icount, f64 co)
   {
-    // carry-save adder
-    // n=number of columns, icount vector = number of bits per column (not necessarily uniform)
-    u64 n = icount.size();
+    // carry-save adder as tree of full adders and half adders
+    // icount vector = number of bits per column (not necessarily uniform)
+    // wiring not modeled (TODO?)
+    // TODO: use 4:2 compressors
+    u64 n = icount.size(); // number of columns
     assert(n!=0);
     u64 cmax = *std::max_element(icount.begin(),icount.end());
     assert(cmax>=2);
     if (cmax == 2) {
-     for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim         
+      // do carry propagate, addition is done
+      for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim
       for (auto it=icount.rbegin(); it!=icount.rend() && *it==0; ++it) n--; // left trim
-      return adder_ks(n,co); // do carry propagate, addition is done
+      return adder_ks(n,co);
     }
-    // CSA reduction tree
+    // Wallace tree (not optimal, FIXME?)
     assert(cmax>=3);
     std::vector<u64> n3;
     std::vector<u64> n2;
@@ -1315,23 +1318,23 @@ namespace hcm {
     n2.resize(n+1);
     ocount.resize(n+1);
     for (u64 i=0; i<n; i++) {
-      u64 r = 0;
-      if (icount[i]==4 && icount[i+1]==0) {
-	n3[i] = 0;
-	n2[i] = 2;
+      n3[i] = icount[i]/3;
+      n2[i] = 0;
+      u64 r = icount[i]%3;
+      if (r==2) {
+	n2[i] = 1;
 	r = 0;
-      } else {
-	n3[i] = icount[i]/3;
-	n2[i] = 0;
-	r = icount[i]%3;
       }
-      ocount[i] += n3[i]+n2[i]+r;
-      ocount[i+1] += n3[i]+n2[i];
+      ocount[i] += n3[i] + n2[i] + r;
+      ocount[i+1] += n3[i] + n2[i];
     }
     cmax = *std::max_element(ocount.begin(),ocount.end());
+    bool feed_HA = false;
+    for (u64 e : ocount) feed_HA |= (e%3==2); // FIXME: pessimistic
     constexpr f64 facap = full_adder(INVCAP).ci;
+    constexpr f64 hacap = half_adder(INVCAP).ci;
     constexpr f64 cpacap = adder_ks(2,INVCAP).ci;
-    f64 loadcap = (cmax==1)? co : (cmax==2)? cpacap : facap;
+    f64 loadcap = (cmax==1)? co : (cmax==2)? cpacap : (feed_HA)? hacap : facap;
     circuit fa = full_adder(loadcap);
     circuit ha = half_adder(loadcap);
     circuit stage;
@@ -1341,7 +1344,7 @@ namespace hcm {
     if (cmax == 1) {
       return stage; // addition is done
     } else {
-      return stage + csa(ocount,co);
+      return stage + csa(ocount,co); // FIXME: pessimistic (columns are not identical)
     }
   }
 
