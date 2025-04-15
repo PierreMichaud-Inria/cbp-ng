@@ -1295,7 +1295,7 @@ namespace hcm {
 
   constexpr circuit csa(const std::vector<u64> &icount, f64 co)
   {
-    // carry-save adder as tree of full adders and half adders
+    // carry-save adder as tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
     // wiring not modeled (TODO?)
     // TODO: use 4:2 compressors
@@ -1309,7 +1309,7 @@ namespace hcm {
       for (auto it=icount.rbegin(); it!=icount.rend() && *it==0; ++it) n--; // left trim
       return adder_ks(n,co);
     }
-    // Wallace tree (not optimal, FIXME?)
+    // Wallace tree (not always optimal, TODO)
     assert(cmax>=3);
     std::vector<u64> n3;
     std::vector<u64> n2;
@@ -1329,17 +1329,16 @@ namespace hcm {
       ocount[i+1] += n3[i] + n2[i];
     }
     cmax = *std::max_element(ocount.begin(),ocount.end());
-    bool feed_HA = false;
-    for (u64 e : ocount) feed_HA |= (e%3==2); // FIXME: pessimistic
     constexpr f64 facap = full_adder(INVCAP).ci;
     constexpr f64 hacap = half_adder(INVCAP).ci;
     constexpr f64 cpacap = adder_ks(2,INVCAP).ci;
-    f64 loadcap = (cmax==1)? co : (cmax==2)? cpacap : (feed_HA)? hacap : facap;
-    circuit fa = full_adder(loadcap);
-    circuit ha = half_adder(loadcap);
     circuit stage;
     for (u64 i=0; i<n; i++) {
-      stage = stage || fa*n3[i] || ha*n2[i];
+      // assume saved carry not on critical path
+      f64 loadcap = (cmax==1)? co : (cmax==2)? cpacap : (ocount[i]%3==2)? hacap : facap;
+      circuit fa = full_adder(loadcap);
+      circuit ha = half_adder(loadcap);
+      stage = stage || fa * n3[i] || ha * n2[i];
     }
     if (cmax == 1) {
       return stage; // addition is done
@@ -1912,7 +1911,14 @@ namespace hcm {
 
   template<u64 WIDTH>
   inline constexpr circuit SUB = adder_ks<false,true>(WIDTH,OUTCAP);
-  
+
+  template<u64 WIDTH, u64 N> requires (N>=2)
+  inline constexpr circuit ADDN = []() {
+    // add N integers, WIDTH bits each
+    std::vector<u64> count (WIDTH,N);
+    return csa(count,OUTCAP);
+  }();
+
   template<u64 N>
   inline constexpr circuit EQUAL = xnor2(AND<N>.ci) * N + AND<N>;
 
@@ -3157,6 +3163,7 @@ namespace hcm {
 
     valt<T> fold_xor() & // lvalue
     {
+      static_assert(ival<T>);
       if constexpr (N>=2) {
 	constexpr circuit c = XOR<N> * T::size;
 	panel.update_logic(c);
@@ -3174,6 +3181,7 @@ namespace hcm {
 
     valt<T> fold_xor() && // rvalue
     {
+      static_assert(ival<T>);
       if constexpr (N>=2) {
 	constexpr circuit c = XOR<N> * T::size;
 	panel.update_logic(c);
@@ -3191,6 +3199,7 @@ namespace hcm {
 
     valt<T> fold_or() & // lvalue
     {
+      static_assert(ival<T>);
       if constexpr (N>=2) {
 	constexpr circuit c = OR<N> * T::size;
 	panel.update_logic(c);
@@ -3208,6 +3217,7 @@ namespace hcm {
 
     valt<T> fold_or() && // rvalue
     {
+      static_assert(ival<T>);
       if constexpr (N>=2) {
 	constexpr circuit c = OR<N> * T::size;
 	panel.update_logic(c);
@@ -3225,6 +3235,7 @@ namespace hcm {
 
     valt<T> fold_and() & // lvalue
     {
+      static_assert(ival<T>);
       if constexpr (N>=2) {
 	constexpr circuit c = AND<N> * T::size;
 	panel.update_logic(c);
@@ -3242,6 +3253,7 @@ namespace hcm {
 
     valt<T> fold_and() && // rvalue
     {
+      static_assert(ival<T>);
       if constexpr (N>=2) {
 	constexpr circuit c = AND<N> * T::size;
 	panel.update_logic(c);
@@ -3255,9 +3267,49 @@ namespace hcm {
       } else {
 	return 0;
       }
+    }
+
+    auto fold_add() & // lvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr u64 RBITS = T::size + std::bit_width(N-1); // output bits
+	constexpr circuit c = ADDN<T::size,N>;
+	panel.update_logic(c);
+	auto data = get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x += e;
+	return val<RBITS,atype>{x,t};
+      } else if constexpr (N==1) {
+	return valt<T>{elem[0]};
+      } else {
+	return valt<T>{0};
+      }
+    }
+
+    auto fold_add() && // rvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr u64 RBITS = T::size + std::bit_width(N-1); // output bits
+	constexpr circuit c = ADDN<T::size,N>;
+	panel.update_logic(c);
+	auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x += e;
+	return val<RBITS,atype>{x,t};
+      } else if constexpr (N==1) {
+	return valt<T>{elem[0]};
+      } else {
+	return valt<T>{0};
+      }
     }    
   };
 
+
+  
 
   // ###########################
 
