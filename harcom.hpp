@@ -3642,7 +3642,7 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    using rtype = val<valt<T1,T2>::size+1,decltype(v1+v2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1+v2)>;
     return rtype{v1+v2, std::max(t1,t2)+c.delay()};
   }
 
@@ -3650,7 +3650,7 @@ namespace hcm {
   auto operator+ (T1&& x1, T2 x2)
   {
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<valt<T1,T2>::size+1,decltype(v1+x2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1+x2)>;
     if (x2==0) return rtype{v1,t1};
     constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_logic(c);
@@ -3682,7 +3682,7 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    using rtype = val<valt<T1,T2>::size+1,decltype(v1-v2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1-v2)>;
     return rtype{v1-v2, std::max(t1,t2)+c.delay()};
   }
 
@@ -3690,7 +3690,7 @@ namespace hcm {
   auto operator- (T1&& x1, T2 x2)
   {
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<valt<T1,T2>::size+1,decltype(v1-x2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1-x2)>;
     if (x2==0) return rtype{v1,t1};
     constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_logic(c);
@@ -3701,7 +3701,7 @@ namespace hcm {
   auto operator- (T1 x1, T2&& x2)
   {
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    using rtype = val<valt<T1,T2>::size+1,decltype(x1-v2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(x1-v2)>;
     if (x1==0) return rtype{-v2,t2};
     constexpr circuit c = INC<valt<T2>::size>;
     proxy::update_logic(c);
