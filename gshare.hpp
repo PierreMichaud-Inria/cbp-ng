@@ -13,8 +13,8 @@ struct gshare : predictor {
   
   val<2> update_2bc(val<2> ctr, val<1> incr)
   {
-    val<2> incsat = select(ctr==3,ctr,ctr+1);
-    val<2> decsat = select(ctr==0,ctr,ctr-1);
+    val<2> incsat = select(ctr==3,ctr,val<2>{ctr+1});
+    val<2> decsat = select(ctr==0,ctr,val<2>{ctr-1});
     return select(incr,incsat,decsat);
   }
 

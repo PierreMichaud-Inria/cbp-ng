@@ -1293,9 +1293,9 @@ namespace hcm {
   }
 
 
-  constexpr circuit csa(const std::vector<u64> &icount, f64 co)
+  inline constexpr circuit carry_save_adder(const std::vector<u64> &icount, f64 co)
   {
-    // carry-save adder as tree of full adders (FA) and half adders (HA)
+    // tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
     // wiring not modeled (TODO?)
     // TODO: use 4:2 compressors
@@ -1304,19 +1304,16 @@ namespace hcm {
     u64 cmax = *std::max_element(icount.begin(),icount.end());
     assert(cmax>=2);
     if (cmax == 2) {
-      // do carry propagate, addition is done
+      // final stage: carry propagate addition
       for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim
       for (auto it=icount.rbegin(); it!=icount.rend() && *it==0; ++it) n--; // left trim
       return adder_ks(n,co);
     }
     // Wallace tree (not always optimal, TODO)
     assert(cmax>=3);
-    std::vector<u64> n3;
-    std::vector<u64> n2;
-    std::vector<u64> ocount;
-    n3.resize(n+1);
-    n2.resize(n+1);
-    ocount.resize(n+1);
+    std::vector<u64> n3 (n+1,0);
+    std::vector<u64> n2 (n+1,0);
+    std::vector<u64> ocount (n+1,0);
     for (u64 i=0; i<n; i++) {
       n3[i] = icount[i]/3;
       n2[i] = 0;
@@ -1343,11 +1340,33 @@ namespace hcm {
     if (cmax == 1) {
       return stage; // addition is done
     } else {
-      return stage + csa(ocount,co); // FIXME: pessimistic (columns are not identical)
+      return stage + carry_save_adder(ocount,co); // FIXME: pessimistic (columns are not identical)
     }
   }
 
 
+  inline constexpr circuit multiplier(u64 n, u64 m, f64 co)
+  {
+    // multiplies two unsigned integers X (n bits) and Y (m bits)
+    // X is the multiplier, Y the multiplicand
+    assert(n>1 && m>1);
+    if (n>m) return multiplier(m,n,co); // faster and more energy efficient
+    u64 cols = m+n-1; // number of CSA columns
+    std::vector<u64> count (cols,n); // number of bits per CSA column
+    for (u64 i=1; i<n; i++) {
+      count[i-1] = i;
+      count[cols-i] = i;
+    }
+    circuit sum = carry_save_adder(count,co); // sum all partial products
+    // compute partial products as ~(~a+~b)
+    circuit pp1 = nor{2}.make(sum.ci); // partial product (one bit)
+    // as inputs have high fanout if n or m is large, we need buffering
+    circuit bufx = buffer(pp1.ci*m,true); // inverting buffer
+    circuit bufy = buffer(pp1.ci*n,true); // inverting buffer
+    return (bufx * n || bufy * m) + pp1 * (m*n) + sum;
+  }
+
+  
   // ###########################
 
   template<u64 N>
@@ -1916,7 +1935,7 @@ namespace hcm {
   inline constexpr circuit ADDN = []() {
     // add N integers, WIDTH bits each
     std::vector<u64> count (WIDTH,N);
-    return csa(count,OUTCAP);
+    return carry_save_adder(count,OUTCAP);
   }();
 
   template<u64 N>
@@ -1940,6 +1959,10 @@ namespace hcm {
     }
     return tree * DATABITS;
   }();
+
+  // signed mul: roughly same complexity as unsigned
+  template<u64 N, u64 M> requires (N>=2 && M>=2)
+  inline constexpr circuit IMUL = multiplier(N,M,OUTCAP);
 
 
   // ###########################
@@ -2166,7 +2189,7 @@ namespace hcm {
   template<u64 N, arith T = u64>
   class val {
     //static_assert(N!=0);
-    static_assert(N <= bitwidth<T>);
+    static_assert(N<=bitwidth<T>,"the number of bits exceeds the underlying C++ type");
     static_assert(N==bitwidth<T> || std::integral<T>);
 
     template<u64,arith> friend class val;
@@ -2602,22 +2625,22 @@ namespace hcm {
     friend val<1> operator<= (T1&&, T2);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1,T2> operator+ (T1&&, T2&&);
+    friend auto operator+ (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1,T2> operator+ (T1&&, T2);
+    friend auto operator+ (T1&&, T2);
 
     template<valtype T>
-    friend valt<T> operator- (T&&);
-    
+    friend auto operator- (T&&);
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1,T2> operator- (T1&&, T2&&);
+    friend auto operator- (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1,T2> operator- (T1&&, T2);
+    friend auto operator- (T1&&, T2);
     
     template<std::integral T1, valtype T2> requires (ival<T2>)
-    friend valt<T1,T2> operator- (T1, T2&&);
+    friend auto operator- (T1, T2&&);
 
     template<valtype T1, valtype T2>  requires (ival<T1> && ival<T2>)
     friend valt<T1> operator<< (T1&&, T2&&);
@@ -2632,11 +2655,8 @@ namespace hcm {
     friend valt<T1> operator>> (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1,T2> operator* (T1&&, T2&&);
+    friend auto operator* (T1&&, T2&&);
 
-    template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1,T2> operator* (T1&&, T2);
-    
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend valt<T1> operator/ (T1&&, T2&&);
 
@@ -3616,70 +3636,76 @@ namespace hcm {
 
   // ADDITION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1,T2> operator+ (T1&& x1, T2&& x2)
+  auto operator+ (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = ADD<valt<T1,T2>::size>;
+    constexpr circuit c = ADD<valt<T1,T2>::size>;
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1+v2, std::max(t1,t2)+c.delay()};
+    using rtype = val<valt<T1,T2>::size+1,decltype(v1+v2)>;
+    return rtype{v1+v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
-  valt<T1,T2> operator+ (T1&& x1, T2 x2)
+  auto operator+ (T1&& x1, T2 x2)
   {
-    if (x2==0) return x1;
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    using rtype = val<valt<T1,T2>::size+1,decltype(v1+x2)>;
+    if (x2==0) return rtype{v1,t1};
     constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_logic(c);
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1+x2, t1+c.delay()};
+    return rtype{v1+x2, t1+c.delay()};
   }  
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
-  valt<T1,T2> operator+ (T1 x1, T2&& x2)
+  auto operator+ (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) + x1;
   }
 
   // CHANGE SIGN
   template<valtype T>
-  valt<T> operator- (T&& x)
+  auto operator- (T&& x)
   {
     constexpr circuit c = INV * valt<T>::size + INC<valt<T>::size>;
     proxy::update_logic(c);
     auto [v,t] = proxy::get_vt(std::forward<T>(x));
-    return {-v, t+c.delay()};
+    using rtype = val<valt<T>::size,decltype(-v)>;
+    return rtype{-v, t+c.delay()};
   }
-  
+
   // SUBTRACTION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1,T2> operator- (T1&& x1, T2&& x2)
+  auto operator- (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = SUB<valt<T1,T2>::size>;
+    constexpr circuit c = SUB<valt<T1,T2>::size>;
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1-v2, std::max(t1,t2)+c.delay()};
+    using rtype = val<valt<T1,T2>::size+1,decltype(v1-v2)>;
+    return rtype{v1-v2, std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
-  valt<T1,T2> operator- (T1&& x1, T2 x2)
+  auto operator- (T1&& x1, T2 x2)
   {
-    if (x2==0) return x1;
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    using rtype = val<valt<T1,T2>::size+1,decltype(v1-x2)>;
+    if (x2==0) return rtype{v1,t1};
     constexpr circuit c = INC<valt<T1>::size>;
     proxy::update_logic(c);
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1-x2, t1+c.delay()};
+    return rtype{v1-x2, t1+c.delay()};
   }
 
   template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
-  valt<T1,T2> operator- (T1 x1, T2&& x2)
+  auto operator- (T1 x1, T2&& x2)
   {
-    if (x1==0) return -x2;
+    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
+    using rtype = val<valt<T1,T2>::size+1,decltype(x1-v2)>;
+    if (x1==0) return rtype{-v2,t2};
     constexpr circuit c = INC<valt<T2>::size>;
     proxy::update_logic(c);
-    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {x1-v2, t2+c.delay()};
+    return rtype{x1-v2, t2+c.delay()};
   }
   
   // LEFT SHIFT
@@ -3720,26 +3746,14 @@ namespace hcm {
 
   // MULTIPLICATION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1,T2> operator* (T1&& x1, T2&& x2)
+  auto operator* (T1&& x1, T2&& x2)
   {
-    // TODO
+    constexpr circuit c = IMUL<valt<T1>::size,valt<T2>::size>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1*v2, std::max(t1,t2)};
-  }
-
-  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
-  valt<T1,T2> operator* (T1&& x1, T2 x2)
-  {
-    // TODO
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1*x2, t1};
-  }
-
-  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
-  valt<T1,T2> operator* (T1 x1, T2&& x2)
-  {
-    return std::forward<T2>(x2) * x1;
+    using rtype = val<valt<T1>::size+valt<T2>::size,decltype(v1*v2)>;
+    return rtype{v1*v2, std::max(t1,t2)+c.delay()};
   }
 
   // DIVISION
@@ -3782,7 +3796,7 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator& (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = AND<2> * std::min(valt<T1>::size,valt<T2>::size);
+    constexpr circuit c = AND<2> * std::min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
@@ -3808,7 +3822,7 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator| (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = OR<2> * std::min(valt<T1>::size,valt<T2>::size);
+    constexpr circuit c = OR<2> * std::min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
@@ -3834,7 +3848,7 @@ namespace hcm {
   template<valtype T1, valtype T2>
   valt<T1,T2> operator^ (T1&& x1, T2&& x2)
   {
-    static constexpr circuit c = XOR<2> * std::min(valt<T1>::size,valt<T2>::size);
+    constexpr circuit c = XOR<2> * std::min(valt<T1>::size,valt<T2>::size);
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
@@ -3883,8 +3897,8 @@ namespace hcm {
   valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
   {
     // this is NOT conditional execution: both sides are evaluated
-    static_assert(valt<T>::size == 1);
-    static_assert(valt<T1>::size == valt<T2>::size);
+    static_assert(valt<T>::size == 1,"the condition of a select is a single bit");
+    static_assert(valt<T1>::size == valt<T2>::size,"both sides of a select must have the same size");
     constexpr auto c = MUX<2,valt<T1>::size>;
     proxy::update_logic(c[0]); // MUX select
     proxy::update_logic(c[1]); // MUX data

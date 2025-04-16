@@ -67,8 +67,8 @@ template<u64 N>
 [[nodiscard]] val<N> update_ctr(val<N> ctr, val<1> incr)
 {
   ctr.fanout(fo<6>{});
-  val<N> incsat = select(ctr==ctr.maxval,ctr,ctr+1);
-  val<N> decsat = select(ctr==ctr.minval,ctr,ctr-1);
+  val<N> incsat = select(ctr==ctr.maxval,ctr,val<N>{ctr+1});
+  val<N> decsat = select(ctr==ctr.minval,ctr,val<N>{ctr-1});
   return select(incr.fo1(),incsat.fo1(),decsat.fo1());
 }
 

@@ -1,9 +1,8 @@
 * missing hardware models
  - ROM
- - integer multiplier
  - popcount
 
-* missing operations (>, <, >=, <=, *, <<, >>, %, /)
+* missing operations (>, <, >=, <=, <<, >>, %, /)
 
 * optimize the priority encoder
 
