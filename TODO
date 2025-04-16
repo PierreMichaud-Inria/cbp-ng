@@ -1,6 +1,4 @@
-* missing hardware models
- - ROM
- - popcount
+* ROM
 
 * missing operations (>, <, >=, <=, <<, >>, %, /)
 

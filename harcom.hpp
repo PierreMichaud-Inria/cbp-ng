@@ -2458,23 +2458,25 @@ namespace hcm {
 
     auto ones() & // lvalue
     {
-      // TODO: transistors & time
+      constexpr circuit c = (N>=2)? ADDN<1,N> : circuit{};
+      panel.update_logic(c);
       auto [x,t] = get_vt();
       auto n = std::popcount(truncate<N>(x));
-      return val<std::bit_width(N)> {n};
+      return val<std::bit_width(N)> {n,t+c.delay()};
     }
 
     auto ones() && // rvalue
     {
-      // TODO: transistors & time
+      constexpr circuit c = (N>=2)? ADDN<1,N> : circuit{};
+      panel.update_logic(c);
       auto [x,t] = std::move(*this).get_vt();
       auto n = std::popcount(truncate<N>(x));
-      return val<std::bit_width(N)> {n};
+      return val<std::bit_width(N)> {n,t+c.delay()};
     }
 
     [[nodiscard]] val priority_encode() & requires std::unsigned_integral<T> // lvalue
     {
-      static constexpr circuit c = priority_encoder<N>;
+      constexpr circuit c = priority_encoder<N>;
       auto [x,t] = get_vt();
       u64 y = x & (x^(x-1));
       panel.update_logic(c);
@@ -2483,7 +2485,7 @@ namespace hcm {
 
     [[nodiscard]] val priority_encode() && requires std::unsigned_integral<T> // rvalue
     {
-      static constexpr circuit c = priority_encoder<N>;
+      constexpr circuit c = priority_encoder<N>;
       auto [x,t] = std::move(*this).get_vt();
       u64 y = x & (x^(x-1));
       panel.update_logic(c);
