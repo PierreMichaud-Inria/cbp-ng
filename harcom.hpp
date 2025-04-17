@@ -635,13 +635,13 @@ namespace hcm {
     return buf;
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX, u64 L=1/*layer*/>
   constexpr circuit wire(f64 length/*um*/, bool cpl=0, f64 cload=0, bool dload=true, f64 bias=0.5)
   {
     // Unidirectional segmented wire
     // The wire is divided into equal length segments
-    // The first segment is driven by a buffer, other segments by a large inverter
+    // The first segment is driven by a buffer, other segments by large inverters
     // Load capacitance can be terminal (dload=0) or uniformly distributed (dload=1)
     // TODO: bidirectional wire is possible (with tristate inverters), but can it be pipelined?
     static_assert(L<std::size(METALRES));
@@ -1149,35 +1149,35 @@ namespace hcm {
   }
 
 
-  template<u64 N, circuit OP, u64 D>
-  constexpr circuit parallel_prefix = []() {
-    // OP = associative 2-input operation, each input is D bits, N = total inputs
-    // TODO: wires
+  inline constexpr circuit parallel_prefix(u64 n, const circuit &op, u64 d)
+  {
+    // op = associative 2-input operation, each input is d bits, output is d bits
+    // n = total inputs
+    // wiring not modeled (TODO?)
     // FIXME: switching activity depends on OP
-    static_assert(D!=0 && N!=0);
-    if constexpr (N<=1) {
-      return circuit{};
+    assert(d!=0 && n!=0);
+    if (n<=1) {
+      return {};
     } else {
       // Ladner-Fischer tree
-      constexpr u64 K = (std::has_single_bit(N))? N/2 : std::bit_floor(N);
-      constexpr circuit right = parallel_prefix<K,OP,D> + buffer(OP.ci*(N-K),false) * D;
-      constexpr circuit left = parallel_prefix<N-K,OP,D>;
-      return (left || right) + OP * (N-K);
+      u64 k = (std::has_single_bit(n))? n/2 : std::bit_floor(n);
+      circuit right = parallel_prefix(k,op,d) + buffer(op.ci*(n-k),false) * d;
+      circuit left = parallel_prefix(n-k,op,d);
+      return (left || right) + op * (n-k);
     }
-  }();
-  
+  }
+
 
   template<u64 N>
   constexpr circuit priority_encoder = []() {
-    // FIXME: not optimized
     static_assert(N!=0);
     if constexpr (N==1) {
       return circuit{};
     } else {
-      constexpr circuit first = inv{}.make(INVCAP) * (N-1);
-      constexpr circuit op = nanding(2,INVCAP) || noring(2,INVCAP);
-      constexpr circuit last = noring(2,INVCAP) * (N-1);
-      return first + parallel_prefix<N,op,2> + last;
+      circuit output = nor{2}.make(INVCAP) * (N-1);
+      circuit input = inv{}.make(output.ci) * (N-1);
+      circuit or2 = nor{2}.make(INVCAP) + inv{}.make(nor{2}.icap());
+      return (input | parallel_prefix(N-1,or2,1)) + output;
     }
   }();
 
@@ -1366,7 +1366,7 @@ namespace hcm {
     return (bufx * n || bufy * m) + pp1 * (m*n) + sum;
   }
 
-  
+
   // ###########################
 
   template<u64 N>
