@@ -851,7 +851,7 @@ namespace hcm {
   {
     f64 scale = std::max(1.,sqrt(co/(xor_cpl{}.icap())));
     circuit x = xor_cpl{}.make(co,scale,bias);
-    circuit i = inv{}.make(x.ci,scale,bias);
+    circuit i = inv{}.make(x.ci,1.,bias);
     circuit c = i*2+x;
     c.ci = i.ci + x.ci;
     return c;
