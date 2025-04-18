@@ -603,7 +603,6 @@ namespace hcm {
 
   using xnor_cpl = xor_cpl; // a,~a,b,~b ==> ~(a^b)
 
-
   template<f64 STAGE_EFFORT=DSE>
   constexpr u64 num_stages(f64 path_effort, bool odd=false)
   {
@@ -696,16 +695,17 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit majority(f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit majority(f64 co)
   {
     // a,b,c ==> ab+ac+bc = ~(~(b+c)+(~a~(bc)))
     and_nor aoi;
-    f64 c1 = aoi.icap<0>(scale);
-    f64 c2 = aoi.icap<1>(scale);
-    circuit i = inv{}.make(c2,scale,bias);
-    circuit na = nand{2}.make(c2,scale,bias);
-    circuit no = nor{2}.make(c1,scale,bias);
-    return ((na | no) || i) + aoi.make(co,scale,bias); // TODO: and_nor inputs bias
+    f64 scale_aoi = std::max(1.,sqrt(co/aoi.icap<1>()));
+    f64 c1 = aoi.icap<0>(scale_aoi);
+    f64 c2 = aoi.icap<1>(scale_aoi);
+    circuit i = inv{}.make(c2);
+    circuit na = nand{2}.make(c2);
+    circuit no = nor{2}.make(c1);
+    return ((na | no) || i) + aoi.make(co,scale_aoi); // FIXME: and_nor inputs bias
   }
 
 
@@ -847,40 +847,36 @@ namespace hcm {
   }  
 
 
-  inline constexpr circuit xor2(f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit xor2(f64 co, f64 bias=0.5)
   {
+    f64 scale = std::max(1.,sqrt(co/(xor_cpl{}.icap())));
     circuit x = xor_cpl{}.make(co,scale,bias);
     circuit i = inv{}.make(x.ci,scale,bias);
     circuit c = i*2+x;
-    c.ci = i.ci + x.ci; // 6 CGATE 
+    c.ci = i.ci + x.ci;
     return c;
   }
 
 
-  inline constexpr circuit xnor2(f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit xnor2(f64 co, f64 bias=0.5)
   {
-    // ~(a^b) = ~(~(ab)(a+b)) slightly faster than xor2
-    or_nand oai;
-    circuit nandab = nand{2}.make(oai.icap<0>(scale),scale,bias);
-    circuit c = nandab + oai.make(co,scale,bias);
-    c.ci += oai.icap<1>(scale); // 7 CGATE
-    return c;
+    return xor2(co,bias);
   }
 
 
-  inline constexpr circuit parity(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
+  inline constexpr circuit parity(u64 n, f64 co, f64 bias=0.5)
   {
     // XOR tree
     if (n<=1) return {};
-    f64 ci = xor2(1/*whatever*/,scale).ci;
+    f64 ci = xor2(1/*whatever*/).ci;
     circuit tree;
     while (n>1) {
       if (n==2) {
 	// last stage
-	tree = tree + xor2(co,scale,bias);
+	tree = tree + xor2(co,bias);
       } else {
 	// not the last stage
-	tree = tree + xor2(ci,scale,bias) * (n/2);
+	tree = tree + xor2(ci,bias) * (n/2);
       }
       n -= n/2;
       bias = 2*bias*(1-bias);
@@ -1192,8 +1188,9 @@ namespace hcm {
       return c;
     } else {
        // a+b
-      circuit x = xor_cpl{}.make(co); // sum
-      circuit n = nor{2}.make(co); // carry out
+      f64 scale = std::max(1.,sqrt(co/(xor_cpl{}.icap()+nor{2}.icap())));
+      circuit x = xor_cpl{}.make(co,scale); // sum (a^b)
+      circuit n = nor{2}.make(co,scale); // carry out (ab)
       circuit c = x|n;
       circuit i = inv{}.make(c.ci);
       c = i*2 + c;
@@ -1206,30 +1203,54 @@ namespace hcm {
   template<bool INCR=false>
   constexpr circuit full_adder(f64 co)
   {
-    // implemented with small input capacitance; faster circuits exist (TODO)
-    // (circuit with large input cap may seem fast, but delay of previous stage increases)
     if constexpr (INCR) {
       // a+b+1
-      // sum = a^~b = ~(~a^~b)
-      // carry = a+b = ~(~a~b)
-      circuit x = xnor2(co); // sum
-      circuit n = nand{2}.make(co); // carry
+      f64 scale = std::max(1.,sqrt(co/(xnor_cpl{}.icap()+nand{2}.icap())));
+      circuit x = xnor_cpl{}.make(co,scale); // sum = a^~b = ~(a^b)
+      circuit n = nand{2}.make(co,scale); // carry = a+b = ~(~a~b)
       circuit xn = x|n;
-      circuit i = inv{}.make(xn.ci); // ~a, ~b
-      return i*2 + xn;
+      circuit c = inv{}.make(xn.ci) * 2 + xn;
+      c.ci += xnor_cpl{}.icap(scale);
+      return c;
     } else {
       // a+b+c
-      // x = ~(abc), y=~(a+b+c), z=ab+ac+bc (carry)
+      // x = ~(abc), y=~(a+b+c), z=ab+ac+bc
       // sum = a^b^c = ~(x(y+z))
-      or_nand oai;
-      f64 c1 = oai.icap<0>();
-      f64 c2 = oai.icap<1>();
-      circuit x = nand{3}.make(c1);
-      circuit y = nor{3}.make(c2);
-      circuit z = majority(c2+co); // carry out
-      circuit s = oai.make(co); // sum
-      circuit fa = (x|y|z)+s; // large input capacitance, need buffering
-      return buffer(fa.ci,false) * 3 + fa;
+      // carry = z
+      f64 scale_oai = 1;
+      f64 scale_aoi = 1;
+      f64 a = and_nor{}.icap<1>() * or_nand{}.icap<1>() / (co*co);
+      f64 b = co / or_nand{}.icap<1>();
+      auto f = [&](f64 x) {return a*pow(x,4)-b;};
+      f64 x0 = sqrt(sqrt(b/a));
+      f64 x1 = x0 / (1.-1./(4*a*pow(x0,3)));
+      if (x1 >= x0) {
+	assert(f(x0)<=x0 && f(x1)>=x1);
+	f64 xm = (x0+x1)/2;
+	for (u64 i=0; i<20; i++) {
+	  if (f(xm)<xm) {
+	    x0 = xm;
+	  } else {
+	    x1 = xm;
+	  }
+	}
+	scale_aoi = std::max(1.,xm*xm * or_nand{}.icap<1>() / co);
+	scale_oai = std::max(1.,xm);
+      }
+      circuit oai = or_nand{}.make(co,scale_oai);
+      f64 coai1 = or_nand{}.icap<0>(scale_oai);
+      f64 coai2 = or_nand{}.icap<1>(scale_oai);
+      circuit x = nand{3}.make(coai1);
+      circuit y = nor{3}.make(coai2);
+      circuit aoi = and_nor{}.make(co+coai2,scale_aoi);
+      f64 caoi1 = and_nor{}.icap<0>(scale_aoi);
+      f64 caoi2 = and_nor{}.icap<1>(scale_aoi);
+      circuit na = nand{2}.make(caoi2);
+      circuit no = nor{2}.make(caoi1);
+      circuit inva = inv{}.make(caoi2);
+      circuit z = ((na | no) || inva) + aoi;
+      circuit fa = (x|y|z) + oai;
+      return fa;
     }
   }
 
@@ -1247,7 +1268,7 @@ namespace hcm {
     basic_gate G[2] = {or_nand{},and_nor{}}; // inverting generate gate
     basic_gate P[2] = {nor{2},nand{2}}; // inverting propagate gate
     circuit sum = xor2(co) * (n-(CARRYIN^1)); // final sum
-    circuit bws = (INCR)? circuit{} : xor2(sum.ci) * n; // bitwise sum (FIXME: xnor for even depth)
+    circuit bws = (INCR)? circuit{} : xor2(sum.ci) * n; // bitwise sum
     circuit bwg; // bitwise generate
     circuit bwp; // bitwise propagate
     if constexpr (! INCR) {
@@ -1288,28 +1309,37 @@ namespace hcm {
 	tree = tree + G[i&1].make(cog1) * n1;
       }
     }
-    circuit adder = (tree | bws) + (sum || carryout); // large input capacitance, need buffering
-    return buffer(adder.ci,false) * (2*n) + adder;
+    circuit adder = (tree | bws) + (sum || carryout); // large input capacitance (12 CGATE)
+    return adder;
   }
 
 
-  inline constexpr circuit carry_save_adder(const std::vector<u64> &icount, f64 co)
+  inline constexpr circuit csa_tree(const std::vector<u64> &icount, f64 co, std::vector<f64> &loadcap)
   {
     // tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
-    // wiring not modeled (TODO?)
-    // TODO: use 4:2 compressors
+    // wiring not modeled
     u64 n = icount.size(); // number of columns
-    assert(n!=0);
+    assert(n!=0);    
     u64 cmax = *std::max_element(icount.begin(),icount.end());
-    assert(cmax>=2);
-    if (cmax == 2) {
-      // final stage: carry propagate addition
-      for (auto it=icount.begin(); it!=icount.end() && *it<=1; ++it) n--; // right trim
-      for (auto it=icount.rbegin(); it!=icount.rend() && *it==0; ++it) n--; // left trim
-      return adder_ks(n,co);
+    u64 cmin = *std::min_element(icount.begin(),icount.end());
+    assert(cmin!=0);
+    if (cmax<=2) {
+      // done
+      circuit output;
+      output.ci = co;
+      u64 right_trim = 0;
+      for (u64 i=0; i<n && icount[i]==1; i++) right_trim++;
+      if (cmax == 2) {
+	// carry propagate addition
+	output = adder_ks(n-right_trim,co);	
+      }
+      assert(loadcap.empty());
+      for (u64 i=0; i<right_trim; i++) loadcap.push_back(co);
+      for (u64 i=right_trim; i<n; i++) loadcap.push_back(output.ci);
+      return output;
     }
-    // Wallace tree (not always optimal, TODO)
+    // Wallace tree
     assert(cmax>=3);
     std::vector<u64> n3 (n+1,0);
     std::vector<u64> n2 (n+1,0);
@@ -1325,23 +1355,25 @@ namespace hcm {
       ocount[i] += n3[i] + n2[i] + r;
       ocount[i+1] += n3[i] + n2[i];
     }
-    cmax = *std::max_element(ocount.begin(),ocount.end());
-    constexpr f64 facap = full_adder(INVCAP).ci;
-    constexpr f64 hacap = half_adder(INVCAP).ci;
-    constexpr f64 cpacap = adder_ks(2,INVCAP).ci;
+    if (ocount[n]==0) ocount.pop_back();
+    circuit csa = csa_tree(ocount,co,loadcap);
     circuit stage;
     for (u64 i=0; i<n; i++) {
-      // assume saved carry not on critical path
-      f64 loadcap = (cmax==1)? co : (cmax==2)? cpacap : (ocount[i]%3==2)? hacap : facap;
-      circuit fa = full_adder(loadcap);
-      circuit ha = half_adder(loadcap);
-      stage = stage || fa * n3[i] || ha * n2[i];
+      if (n3[i]==0 && n2[i]==0) continue;
+      assert(i+1<loadcap.size());
+      f64 ocap = std::max(loadcap[i],loadcap[i+1]);
+      circuit col = full_adder(ocap) * n3[i] || half_adder(ocap) * n2[i];
+      stage = stage || col;
+      loadcap[i] = col.ci;
     }
-    if (cmax == 1) {
-      return stage; // addition is done
-    } else {
-      return stage + carry_save_adder(ocount,co); // FIXME: pessimistic (columns are not identical)
-    }
+    return stage + csa;
+  }
+
+
+  inline constexpr circuit carry_save_adder(const std::vector<u64> &icount, f64 co)
+  {
+    std::vector<f64> loadcap;
+    return csa_tree(icount,co,loadcap);
   }
 
 
