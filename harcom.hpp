@@ -65,6 +65,9 @@ namespace hcm {
   template<typename T>
   concept arith = std::integral<T> || std::floating_point<T>;
 
+  template<typename T, typename X, typename Y>
+  concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
+
   template<typename T>
   concept action = requires (T f) {f();} || requires (T f, u64 i) {f(i);};
 
@@ -1145,22 +1148,29 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit parallel_prefix(u64 n, const circuit &op, u64 d)
+  template<u64 N, unaryfunc<f64,circuit> F>
+  constexpr circuit parallel_prefix(F op, f64 (&loadcap)[N])
   {
-    // op = associative 2-input operation, each input is d bits, output is d bits
-    // n = total inputs
+    // Kogge-Stone parallel prefix tree
+    // N = number of columns
+    // op represents associative 2-input operation (circuit = op(load_cap))
     // wiring not modeled (TODO?)
-    // FIXME: switching activity depends on OP
-    assert(d!=0 && n!=0);
-    if (n<=1) {
-      return {};
-    } else {
-      // Ladner-Fischer tree
-      u64 k = (std::has_single_bit(n))? n/2 : std::bit_floor(n);
-      circuit right = parallel_prefix(k,op,d) + buffer(op.ci*(n-k),false) * d;
-      circuit left = parallel_prefix(n-k,op,d);
-      return (left || right) + op * (n-k);
+    // FIXME: switching activity depends on operation
+    circuit tree;
+    for (u64 step=std::bit_floor(N-1); step>=1; step/=2) {
+      circuit stage;
+      for (u64 i=N-1; i>=step; i--) {
+	if (i+step*2 < N) loadcap[i] += loadcap[i+step*2];
+	circuit c = op(loadcap[i]);
+	stage = stage || c;
+	loadcap[i] = c.ci;
+      }
+      tree = stage + tree;
     }
+    for (u64 i=0; i<N-1; i++)
+      loadcap[i] += loadcap[i+1];
+    tree.ci = *std::max_element(loadcap,loadcap+N);
+    return tree;
   }
 
 
@@ -1170,10 +1180,18 @@ namespace hcm {
     if constexpr (N==1) {
       return circuit{};
     } else {
-      circuit output = nor{2}.make(INVCAP) * (N-1);
-      circuit input = inv{}.make(output.ci) * (N-1);
-      circuit or2 = nor{2}.make(INVCAP) + inv{}.make(nor{2}.icap());
-      return (input | parallel_prefix(N-1,or2,1)) + output;
+      f64 co = INVCAP;
+      circuit output = nor{2}.make(co);
+      f64 ocap[N-1];
+      std::fill(ocap,ocap+N-1,output.ci);
+      auto or2 = [] (f64 co) {
+	f64 scale_inv = sqrt(co/inv{}.icap());
+	circuit i = inv{}.make(co,scale_inv);
+	return nor{2}.make(i.ci) + i;
+      };
+      circuit prefix_or = parallel_prefix(or2,ocap);
+      circuit input = inv{}.make(prefix_or.ci);
+      return input * (N-1) + prefix_or + output * (N-1);
     }
   }();
 
@@ -2827,10 +2845,6 @@ namespace hcm {
 
 
   // ###########################
-
-  template<typename T, typename X, typename Y>
-  concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
-
 
   template<valtype T, u64 N>
   class arr {
