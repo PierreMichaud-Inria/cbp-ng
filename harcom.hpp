@@ -867,27 +867,6 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit parity(u64 n, f64 co, f64 bias=0.5)
-  {
-    // XOR tree
-    if (n<=1) return {};
-    f64 ci = xor2(1/*whatever*/).ci;
-    circuit tree;
-    while (n>1) {
-      if (n==2) {
-	// last stage
-	tree = tree + xor2(co,bias);
-      } else {
-	// not the last stage
-	tree = tree + xor2(ci,bias) * (n/2);
-      }
-      n -= n/2;
-      bias = 2*bias*(1-bias);
-    }
-    return tree;
-  }
-
-
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit decode1(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/)
   {
@@ -1148,54 +1127,6 @@ namespace hcm {
   }
 
 
-  template<u64 N, unaryfunc<f64,circuit> F>
-  constexpr circuit parallel_prefix(F op, f64 (&loadcap)[N])
-  {
-    // Kogge-Stone parallel prefix tree
-    // N = number of columns
-    // op represents associative 2-input operation (circuit = op(load_cap))
-    // wiring not modeled (TODO?)
-    // FIXME: switching activity depends on operation
-    circuit tree;
-    for (u64 step=std::bit_floor(N-1); step>=1; step/=2) {
-      circuit stage;
-      for (u64 i=N-1; i>=step; i--) {
-	if (i+step*2 < N) loadcap[i] += loadcap[i+step*2];
-	circuit c = op(loadcap[i]);
-	stage = stage || c;
-	loadcap[i] = c.ci;
-      }
-      tree = stage + tree;
-    }
-    for (u64 i=0; i<N-1; i++)
-      loadcap[i] += loadcap[i+1];
-    tree.ci = *std::max_element(loadcap,loadcap+N);
-    return tree;
-  }
-
-
-  template<u64 N>
-  constexpr circuit priority_encoder = []() {
-    static_assert(N!=0);
-    if constexpr (N==1) {
-      return circuit{};
-    } else {
-      f64 co = INVCAP;
-      circuit output = nor{2}.make(co);
-      f64 ocap[N-1];
-      std::fill(ocap,ocap+N-1,output.ci);
-      auto or2 = [] (f64 co) {
-	f64 scale_inv = sqrt(co/inv{}.icap());
-	circuit i = inv{}.make(co,scale_inv);
-	return nor{2}.make(i.ci) + i;
-      };
-      circuit prefix_or = parallel_prefix(or2,ocap);
-      circuit input = inv{}.make(prefix_or.ci);
-      return input * (N-1) + prefix_or + output * (N-1);
-    }
-  }();
-
-
   template<bool INCR=false>
   constexpr circuit half_adder(f64 co)
   {
@@ -1414,6 +1345,53 @@ namespace hcm {
     circuit bufx = buffer(pp1.ci*m,true); // inverting buffer
     circuit bufy = buffer(pp1.ci*n,true); // inverting buffer
     return (bufx * n || bufy * m) + pp1 * (m*n) + sum;
+  }
+
+
+  template<unaryfunc<f64,circuit> F>
+  constexpr circuit reduction(u64 n, F op, f64 co)
+  {
+    // n = number of columns
+    // op represents associative 2-input operation (circuit = op(load_cap))
+    // co = output capacitance
+    // FIXME: switching activity depends on operation
+    assert(n!=0);
+    if (n==1) {
+      circuit nothing;
+      nothing.ci = co;
+      return nothing;
+    } else if (n==2) {
+      return op(co);
+    }
+    circuit tree = reduction(n-n/2,op,co);
+    return op(tree.ci) * (n/2) + tree;
+  }
+
+
+  template<u64 N, unaryfunc<f64,circuit> F>
+  constexpr circuit parallel_prefix(F op, f64 (&loadcap)[N])
+  {
+    // Kogge-Stone parallel prefix tree
+    // op represents associative 2-input operation (circuit = op(load_cap))
+    // N = number of columns
+    // loadcap = output capacitances
+    // FIXME: switching activity depends on operation
+    static_assert(N!=0);
+    circuit tree;
+    for (u64 step=std::bit_floor(N-1); step>=1; step/=2) {
+      circuit stage;
+      for (u64 i=N-1; i>=step; i--) {
+	if (i+step*2 < N) loadcap[i] += loadcap[i+step*2];
+	circuit c = op(loadcap[i]);
+	stage = stage || c;
+	loadcap[i] = c.ci;
+      }
+      tree = stage + tree;
+    }
+    for (u64 i=0; i<N-1; i++)
+      loadcap[i] += loadcap[i+1];
+    tree.ci = *std::max_element(loadcap,loadcap+N);
+    return tree;
   }
 
 
@@ -1967,8 +1945,8 @@ namespace hcm {
   inline constexpr circuit NOR = noring(N,OUTCAP);
 
   template<u64 N> requires (N>=2)
-  inline constexpr circuit XOR = parity(N,OUTCAP);
-  
+  inline constexpr circuit XOR = reduction(N,[](f64 co){return xor2(co);},OUTCAP);
+
   template<u64 N> requires (N>=2)
   inline constexpr circuit XNOR = XOR<N>;
   
@@ -1996,6 +1974,27 @@ namespace hcm {
 
   template<u64 N, u64 WIDTH> requires (N>=2)
   inline constexpr auto MUX = mux(N,WIDTH,OUTCAP);
+
+  template<u64 N>
+  constexpr circuit priority_encoder = []() {
+    static_assert(N!=0);
+    if constexpr (N==1) {
+      return circuit{};
+    } else {
+      f64 co = INVCAP;
+      circuit output = nor{2}.make(co);
+      f64 ocap[N-1];
+      std::fill(ocap,ocap+N-1,output.ci);
+      auto or2 = [] (f64 co) {
+	f64 scale_inv = sqrt(co/inv{}.icap());
+	circuit i = inv{}.make(co,scale_inv);
+	return nor{2}.make(i.ci) + i;
+      };
+      circuit prefix_or = parallel_prefix(or2,ocap);
+      circuit input = inv{}.make(prefix_or.ci);
+      return input * (N-1) + prefix_or + output * (N-1);
+    }
+  }();
 
   // circuit for replicating a value M times
   template<u64 DATABITS, u64 COPIES>
@@ -3545,8 +3544,8 @@ namespace hcm {
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator== (T1&& x1, T2 x2)
   {
-    constexpr circuit reduction = NOR<valt<T1>::size>;
-    circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
+    constexpr circuit reduc = NOR<valt<T1>::size>;
+    circuit c = INV * ones<valt<T1>::size>(x2) + reduc; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_equal(v1,x2), t1+c.delay()};
@@ -3573,8 +3572,8 @@ namespace hcm {
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator!= (T1&& x1, T2 x2)
   {
-    constexpr circuit reduction = OR<valt<T1>::size>;
-    circuit c = INV * ones<valt<T1>::size>(x2) + reduction; // not constexpr
+    constexpr circuit reduc = OR<valt<T1>::size>;
+    circuit c = INV * ones<valt<T1>::size>(x2) + reduc; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_different(v1,x2), t1+c.delay()};
