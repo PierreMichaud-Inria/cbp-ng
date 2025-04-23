@@ -1351,7 +1351,7 @@ namespace hcm {
   template<unaryfunc<f64,circuit> F>
   constexpr circuit reduction(u64 n, F op, f64 co)
   {
-    // n = number of columns
+    // n = number of inputs
     // op represents associative 2-input operation (circuit = op(load_cap))
     // co = output capacitance
     // FIXME: switching activity depends on operation
@@ -1395,6 +1395,54 @@ namespace hcm {
   }
 
 
+  template<u64 N>
+  constexpr circuit parallel_prefix(circuit (*op1)(f64), circuit (*op2)(f64), f64 (&loadcap)[N])
+  {
+    // Kogge-Stone parallel prefix tree but with alternating polarity:
+    // 1st stage uses op1, 2nd stage uses op2, 3rd stage uses op1, 4th stage uses op2, and so on
+    // The actual associative operation is A op B = ~(A op1 B) = (~A op2 ~B)
+    // For example, op1=NOR implies op2=NAND and op=OR
+    // N = number of columns
+    // loadcap = output capacitances
+    // FIXME: switching activity depends on operation
+    static_assert(N!=0);
+    std::array op = {op1,op2};
+    u64 stages = std::bit_width(N-1); // number of computation stages
+    bool pol = stages & 1; // polarity of the last computation stage (pol=1 means inverted)
+    circuit tree;
+    if (pol) {
+      // odd number of computation stages: end with a stage of inverters
+      for (u64 i=0; i<N; i++) {
+	circuit c = inv{}.make(loadcap[i]);
+	tree = tree || c;
+	loadcap[i] = c.ci;
+      }
+    }
+    for (u64 step=std::bit_floor(N-1); step>=1; step/=2) {
+      circuit stage;
+      for (u64 i=N-1; i>=step; i--) {
+	if (i+step*2 < N) loadcap[i] += loadcap[i+step*2];
+	circuit c = op[pol](loadcap[i]);
+	stage = stage || c;
+	loadcap[i] = c.ci;
+      }
+      // inverters are used to propagate values that are computed earlier than the last stage
+      for (u64 i=0; i<step; i++) {
+	circuit c = inv{}.make(loadcap[i]);
+	stage = stage || c;
+	loadcap[i] = c.ci;
+      }
+      tree = stage + tree;
+      pol ^= 1;
+    }
+    assert(!pol);
+    for (u64 i=0; i<N-1; i++)
+      loadcap[i] += loadcap[i+1];
+    tree.ci = *std::max_element(loadcap,loadcap+N);
+    return tree;    
+  }
+
+  
   // ###########################
 
   template<u64 N>
@@ -1925,9 +1973,9 @@ namespace hcm {
     (sram<llround(E0*pow(X,I)),D>::print("E="+std::to_string(llround(E0*pow(X,I)))+": "),...);
   }  
 
-  
+
   // ###########################
-  
+
   inline constexpr f64 OUTCAP = INVCAP;
   
   inline constexpr circuit INV = inv{}.make(OUTCAP);
@@ -1985,16 +2033,13 @@ namespace hcm {
       circuit output = nor{2}.make(co);
       f64 ocap[N-1];
       std::fill(ocap,ocap+N-1,output.ci);
-      auto or2 = [] (f64 co) {
-	f64 scale_inv = sqrt(co/inv{}.icap());
-	circuit i = inv{}.make(co,scale_inv);
-	return nor{2}.make(i.ci) + i;
-      };
-      circuit prefix_or = parallel_prefix(or2,ocap);
+      auto nor2 = [] (f64 co) {return nor{2}.make(co);};
+      auto nand2 = [] (f64 co) {return nand{2}.make(co);};
+      circuit prefix_or = parallel_prefix(nor2,nand2,ocap);
       circuit input = inv{}.make(prefix_or.ci);
       return input * (N-1) + prefix_or + output * (N-1);
     }
-  }();
+  }();  
 
   // circuit for replicating a value M times
   template<u64 DATABITS, u64 COPIES>
@@ -3375,8 +3420,6 @@ namespace hcm {
     }    
   };
 
-
-  
 
   // ###########################
 
