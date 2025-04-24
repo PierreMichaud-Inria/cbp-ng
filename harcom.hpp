@@ -1247,7 +1247,7 @@ namespace hcm {
 	f64 cog1 = G[(i+1)&1].icap<0>();
 	f64 cog2 = G[(i+1)&1].icap<0>() + G[(i+1)&1].icap<1>();
 	f64 cop1 = G[(i+1)&1].icap<1>() + P[(i+1)&1].icap();
-	f64 cop2 = G[(i+1)&1].icap<1>() + 2 * P[(i+1)&1].icap();;
+	f64 cop2 = G[(i+1)&1].icap<1>() + 2 * P[(i+1)&1].icap();
 	circuit g = (G[i&1].make(cog1) * n1) || (G[i&1].make(cog2) * (ng-n1));
 	circuit p = (P[i&1].make(cop1) * np1) || (P[i&1].make(cop2) * (np-np1));
 	tree = tree + (g | p);
@@ -1396,24 +1396,25 @@ namespace hcm {
 
 
   template<u64 N>
-  constexpr circuit parallel_prefix(circuit (*op1)(f64), circuit (*op2)(f64), f64 (&loadcap)[N])
+  constexpr circuit parallel_prefix(u64 data, circuit (*op1)(f64), circuit (*op2)(f64), f64 (&loadcap)[N])
   {
     // Kogge-Stone parallel prefix tree but with alternating polarity:
     // 1st stage uses op1, 2nd stage uses op2, 3rd stage uses op1, 4th stage uses op2, and so on
     // The actual associative operation is A op B = ~(A op1 B) = (~A op2 ~B)
     // For example, op1=NOR implies op2=NAND and op=OR
+    // data = number of data bits
     // N = number of columns
     // loadcap = output capacitances
     // FIXME: switching activity depends on operation
     static_assert(N!=0);
     std::array op = {op1,op2};
     u64 stages = std::bit_width(N-1); // number of computation stages
-    bool pol = stages & 1; // polarity of the last computation stage (pol=1 means inverted)
+    bool pol = stages & 1; // polarity of the output of the last computation stage (pol=1 means inverted)
     circuit tree;
     if (pol) {
       // odd number of computation stages: end with a stage of inverters
       for (u64 i=0; i<N; i++) {
-	circuit c = inv{}.make(loadcap[i]);
+	circuit c = inv{}.make(loadcap[i]) * data;
 	tree = tree || c;
 	loadcap[i] = c.ci;
       }
@@ -1427,8 +1428,9 @@ namespace hcm {
 	loadcap[i] = c.ci;
       }
       // inverters are used to propagate values that are computed earlier than the last stage
+      // (FIXME: some inverters are unnecessary)
       for (u64 i=0; i<step; i++) {
-	circuit c = inv{}.make(loadcap[i]);
+	circuit c = inv{}.make(loadcap[i]) * data;
 	stage = stage || c;
 	loadcap[i] = c.ci;
       }
@@ -1442,7 +1444,86 @@ namespace hcm {
     return tree;    
   }
 
-  
+
+  inline constexpr circuit greater_than(u64 n, f64 co, bool gte = false)
+  {
+    // Inputs: two n-bit unsigned integers A=(An,...,A1) and B=(Bn,...,B1)
+    // Outputs: G=(A>B), E=(A==B)
+    // Divide and conquer: A=XY, B=ZW ==> G = (X>Z) || (X==Z && Y>W)
+    // This 2-bit binary operation is associative: (g,e) * (g',e') = (g+eg',ee')
+    // Define (G[i:i],E[i:i]) = (Ai~Bi,~(Ai^Bi)) for all i in [1,n]
+    // Define, for i>j>k, (G[i:k],E[i:k]) = (G[i:j],E[i:j]) * (G[j-1:k],E[j-1:k])
+    // We have: G=G[n:1] and E=E[n:1]
+    // Use reduction tree with alternating polarity: (AOI,NAND) at stage 1, (OAI,NOR) at stage 2
+    // NB: A>=B is equivalent to ~(A<B) ==> start with inverted polarity
+    assert(n!=0);
+    basic_gate I[2] = {nor{2},nand{2}}; // initial G stage, depending on polarity
+    basic_gate G[2] = {and_nor{},or_nand{}}; // reduction stage G, depending on polarity
+    basic_gate E[2] = {nand{2},nor{2}}; // reduction stage E, depending on polarity      
+    if (n==1) {
+      circuit c = inv{}.make(I[gte].icap()) + I[gte].make(co);
+      c.ci = std::max(c.ci,I[gte].icap());
+      return c;
+    }
+    assert(n>=2);
+    bool pol = gte; // polarity of the inputs (pol=1 means inverted)
+    // initial stage
+    f64 cgleft = G[pol].icap<0>();
+    f64 celeft = G[pol].icap<1>() + E[pol^1].icap();
+    f64 cgright = G[pol].icap<2>();
+    f64 ceright = E[pol].icap();          
+    circuit gleft = (inv{}.make(I[gte].icap()) + I[gte].make(cgleft)) * (n/2);
+    gleft.ci = std::max(gleft.ci,I[gte].icap());
+    circuit gright = (inv{}.make(I[gte].icap()) + I[gte].make(cgright)) * (n/2);
+    gright.ci = std::max(gright.ci,I[gte].icap());
+    circuit ginv = (inv{}.make(I[gte].icap()) + I[gte].make(inv{}.icap())) * (n%2);
+    ginv.ci = std::max(ginv.ci,I[gte].icap());
+    circuit eleft = xnor2(celeft) * (n/2); // XOR and XNOR are identical circuits
+    circuit eright = xnor2(ceright) * (n/2-1); // the rightmost E circuit is not needed
+    circuit einv = xnor2(inv{}.icap()) * (n%2);
+    circuit tree = (gleft | eleft) || (gright | eright) || (ginv | einv);
+    // reduction tree
+    while (n>=2) {
+      u64 nops = n/2; // number of reduction operations in this stage
+      u64 nextn = n-nops; // value of n for the next stage
+      circuit stage;
+      if (nextn == 1) {
+	// last reduction stage
+	f64 ocap = (pol==gte)? inv{}.icap() : co;
+	stage = G[pol].make(ocap); // the E circuit is not needed
+      } else {
+	// next stage is a reduction stage
+	f64 cgleft = G[pol^1].icap<0>();
+	f64 celeft = G[pol^1].icap<1>() + E[pol^1].icap();
+	f64 cgright = G[pol^1].icap<2>();
+	f64 ceright = E[pol^1].icap();
+	u64 nextnops = nextn/2; // >=1
+	u64 nopsfeedright = nextnops; // >=1
+	u64 nopsfeedleft = nextnops - (n%2) * (1-nextn%2);
+	// when n is odd, transmit the remaining bundle (g,e) through a pair of inverters
+	u64 nopsfeedinv = (1-n%2) * (nextn%2);
+	u64 ninvfeedleft = nextnops - nopsfeedleft;
+	u64 ninvfeedinv = (n%2) * (nextn%2);
+	circuit opsfeedleft = (G[pol].make(cgleft) | E[pol].make(celeft)) * nopsfeedleft;
+	// the rightmost E circuit is not needed
+	circuit opsfeedright = G[pol].make(cgright) * nopsfeedright | E[pol].make(ceright) * (nopsfeedright-1);
+	circuit opsfeedinv = (G[pol].make(INVCAP) | E[pol].make(INVCAP)) * nopsfeedinv;
+	circuit invfeedleft = (inv{}.make(cgleft) | inv{}.make(celeft)) * ninvfeedleft;
+	circuit invfeedinv = inv{}.make(INVCAP) * (2 * ninvfeedinv); // FIXME: unneeded
+	stage = opsfeedleft || opsfeedright || opsfeedinv || invfeedleft || invfeedinv;
+      }
+      tree = tree + stage;
+      n = nextn;
+      pol ^= 1;
+    }
+    // pol is the polarity of the outputs of the reduction tree
+    if (pol != gte) {
+      tree = tree + inv{}.make(co);
+    }
+    return tree;
+  }
+
+
   // ###########################
 
   template<u64 N>
@@ -2020,6 +2101,12 @@ namespace hcm {
   template<u64 N>
   inline constexpr circuit NEQ = xor2(OR<N>.ci) * N + OR<N>;
 
+  template<u64 N>
+  inline constexpr circuit GT = greater_than(N,OUTCAP,false);
+
+  template<u64 N>
+  inline constexpr circuit GTE = greater_than(N,OUTCAP,true);
+
   template<u64 N, u64 WIDTH> requires (N>=2)
   inline constexpr auto MUX = mux(N,WIDTH,OUTCAP);
 
@@ -2035,7 +2122,7 @@ namespace hcm {
       std::fill(ocap,ocap+N-1,output.ci);
       auto nor2 = [] (f64 co) {return nor{2}.make(co);};
       auto nand2 = [] (f64 co) {return nand{2}.make(co);};
-      circuit prefix_or = parallel_prefix(nor2,nand2,ocap);
+      circuit prefix_or = parallel_prefix(1,nor2,nand2,ocap);
       circuit input = inv{}.make(prefix_or.ci);
       return input * (N-1) + prefix_or + output * (N-1);
     }
@@ -3632,18 +3719,21 @@ namespace hcm {
   template<valtype T1, valtype T2>
   val<1> operator> (T1&& x1, T2&& x2)
   {
-    // TODO
+    static_assert(valt<T1>::size == valt<T2>::size);
+    constexpr circuit c = GT<valt<T1>::size>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {is_greater(v1,v2), std::max(t1,t2)};
+    return {is_greater(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator> (T1&& x1, T2 x2)
   {
-    // TODO
+    constexpr circuit c = GT<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {is_greater(v1,x2), t1};
+    return {is_greater(v1,x2), t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3656,18 +3746,21 @@ namespace hcm {
   template<valtype T1, valtype T2>
   val<1> operator< (T1&& x1, T2&& x2)
   {
-    // TODO
+    static_assert(valt<T1>::size == valt<T2>::size);
+    constexpr circuit c = GT<valt<T1>::size>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {is_less(v1,v2), std::max(t1,t2)};
+    return {is_less(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator< (T1&& x1, T2 x2)
   {
-    // TODO
+    constexpr circuit c = GT<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {is_less(v1,x2), t1};
+    return {is_less(v1,x2), t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3680,18 +3773,21 @@ namespace hcm {
   template<valtype T1, valtype T2>
   val<1> operator>= (T1&& x1, T2&& x2)
   {
-    // TODO
+    static_assert(valt<T1>::size == valt<T2>::size);
+    constexpr circuit c = GTE<valt<T1>::size>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {is_greater_equal(v1,v2), std::max(t1,t2)};
+    return {is_greater_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator>= (T1&& x1, T2 x2)
   {
-    // TODO
+    constexpr circuit c = GTE<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {is_greater_equal(v1,x2), t1};
+    return {is_greater_equal(v1,x2), t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
@@ -3704,18 +3800,21 @@ namespace hcm {
   template<valtype T1, valtype T2>
   val<1> operator<= (T1&& x1, T2&& x2)
   {
-    // TODO
+    static_assert(valt<T1>::size == valt<T2>::size);
+    constexpr circuit c = GTE<valt<T1>::size>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {is_less_equal(v1,v2), std::max(t1,t2)};
+    return {is_less_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
   template<valtype T1, arith T2> // second argument is a constant
   val<1> operator<= (T1&& x1, T2 x2)
   {
-    // TODO
+    constexpr circuit c = GTE<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {is_less_equal(v1,x2), t1};
+    return {is_less_equal(v1,x2), t1+c.delay()};
   }
 
   template<arith T1, valtype T2> // first argument is a constant
