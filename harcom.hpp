@@ -152,11 +152,11 @@ namespace hcm {
   }  
 
   constexpr auto to_unsigned(std::integral auto x) {return std::make_unsigned_t<decltype(x)>(x);}
-  constexpr inline auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
-  constexpr inline auto to_unsigned(f64 x) {return std::bit_cast<u64>(x);}
+  constexpr auto to_unsigned(f32 x) {return std::bit_cast<u32>(x);}
+  constexpr auto to_unsigned(f64 x) {return std::bit_cast<u64>(x);}
 
   template<arith T>
-  inline constexpr u64 bitwidth = (std::same_as<T,bool>)? 1 : sizeof(T)*8;
+  constexpr u64 bitwidth = (std::same_as<T,bool>)? 1 : sizeof(T)*8;
   
   template<u64 N, std::integral T>
   constexpr auto truncate(T x)
@@ -174,7 +174,7 @@ namespace hcm {
     return std::popcount(truncate<N>(to_unsigned(x)));
   }
 
-  inline constexpr u64 to_pow2(f64 x)
+  constexpr u64 to_pow2(f64 x)
   {
     // returns the power of 2 closest to x
     u64 n0 = std::bit_floor(u64(llround(floor(x))));
@@ -182,7 +182,7 @@ namespace hcm {
     return (x*x > n0*n1)? n1 : n0;
   }
 
-  inline constexpr u8 bit_reversal(u8 x)
+  constexpr u8 bit_reversal(u8 x)
   {
     u8 y = x&1;
     for (int i=1; i<8; i++) {
@@ -192,7 +192,7 @@ namespace hcm {
     return y;
   }
 
-  inline constexpr auto reversed_byte = [] () {
+  constexpr auto reversed_byte = [] () {
     std::array<u8,256> b;
     for (u64 i=0; i<256; i++) {
       b[i] = bit_reversal(i);
@@ -379,7 +379,7 @@ namespace hcm {
   inline constexpr u64 DSMAX = std::numeric_limits<u64>::max(); // default maximum scale is unlimited
 
 
-  inline constexpr f64 energy_fJ(f64 cap_fF, f64 vdiff/*volt*/)
+  constexpr f64 energy_fJ(f64 cap_fF, f64 vdiff/*volt*/)
   {
     // energy dissipated for changing capacitance voltage by VDIFF
     assert(vdiff>0);
@@ -387,7 +387,7 @@ namespace hcm {
   }
 
 
-  inline constexpr f64 wire_res_delay(f64 res/*Ohm*/, f64 wirecap_pF, f64 loadcap_pF=0)
+  constexpr f64 wire_res_delay(f64 res/*Ohm*/, f64 wirecap_pF, f64 loadcap_pF=0)
   {
     // approximate distributed RC line as lumped PI1 circuit (Rao, DAC 1995)
     f64 ElmoreDelay = res * (wirecap_pF/2 + loadcap_pF); // ps
@@ -396,14 +396,14 @@ namespace hcm {
   }
 
 
-  inline constexpr f64 proba_switch(f64 bias)
+  constexpr f64 proba_switch(f64 bias)
   {
     assert(bias>=0 && bias<=1);
     return 2 * bias * (1-bias);
   }
 
 
-  inline constexpr f64 proba_bias(f64 proba_switch)
+  constexpr f64 proba_bias(f64 proba_switch)
   {
     assert(proba_switch <= 0.5); // random switching (Bernoulli process)
     return 0.5 * (1-sqrt(1-2*proba_switch)); // does not exceed 1/2
@@ -567,7 +567,7 @@ namespace hcm {
       return {tr, delay_ps, cimax*scale, cg*scale, bias};
     }
   };
-  
+
   struct inv : basic_gate { // inverter
     constexpr inv() : basic_gate(2,{INVCAP},INVCAP,INVCAP) {}
   };
@@ -698,7 +698,7 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit majority(f64 co)
+  constexpr circuit majority(f64 co)
   {
     // a,b,c ==> ab+ac+bc = ~(~(b+c)+(~a~(bc)))
     and_nor aoi;
@@ -850,7 +850,7 @@ namespace hcm {
   }  
 
 
-  inline constexpr circuit xor2(f64 co, f64 bias=0.5)
+  constexpr circuit xor2(f64 co, f64 bias=0.5)
   {
     f64 scale = std::max(1.,sqrt(co/(xor_cpl{}.icap())));
     circuit x = xor_cpl{}.make(co,scale,bias);
@@ -861,7 +861,7 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit xnor2(f64 co, f64 bias=0.5)
+  constexpr circuit xnor2(f64 co, f64 bias=0.5)
   {
     return xor2(co,bias);
   }
@@ -1263,7 +1263,7 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit csa_tree(const std::vector<u64> &icount, f64 co, std::vector<f64> &loadcap)
+  constexpr circuit csa_tree(const std::vector<u64> &icount, f64 co, std::vector<f64> &loadcap)
   {
     // tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
@@ -1319,14 +1319,14 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit carry_save_adder(const std::vector<u64> &icount, f64 co)
+  constexpr circuit carry_save_adder(const std::vector<u64> &icount, f64 co)
   {
     std::vector<f64> loadcap;
     return csa_tree(icount,co,loadcap);
   }
 
 
-  inline constexpr circuit multiplier(u64 n, u64 m, f64 co)
+  constexpr circuit multiplier(u64 n, u64 m, f64 co)
   {
     // multiplies two unsigned integers X (n bits) and Y (m bits)
     // X is the multiplier, Y the multiplicand
@@ -1445,7 +1445,7 @@ namespace hcm {
   }
 
 
-  inline constexpr circuit greater_than(u64 n, f64 co, bool gte = false)
+  constexpr circuit unsigned_greater_than(u64 n, f64 co, bool gte = false)
   {
     // Inputs: two n-bit unsigned integers A=(An,...,A1) and B=(Bn,...,B1)
     // Outputs: G=(A>B), E=(A==B)
@@ -1900,7 +1900,7 @@ namespace hcm {
   };
 
 
-  inline constexpr bool ok_config(u64 E/*entries*/, u64 D/*data bits*/, u64 MAXN, u64 MAXM)
+  constexpr bool ok_config(u64 E/*entries*/, u64 D/*data bits*/, u64 MAXN, u64 MAXM)
   {
     bool ok = E!=0 && D!=0; // mandatory
     ok = ok && std::has_single_bit(MAXN); // mandatory: MAXN must be a power of 2
@@ -2058,7 +2058,7 @@ namespace hcm {
   // ###########################
 
   inline constexpr f64 OUTCAP = INVCAP;
-  
+
   inline constexpr circuit INV = inv{}.make(OUTCAP);
   
   template<u64 N>
@@ -2102,10 +2102,10 @@ namespace hcm {
   inline constexpr circuit NEQ = xor2(OR<N>.ci) * N + OR<N>;
 
   template<u64 N>
-  inline constexpr circuit GT = greater_than(N,OUTCAP,false);
+  inline constexpr circuit GT = unsigned_greater_than(N,OUTCAP,false); // TODO: signed
 
   template<u64 N>
-  inline constexpr circuit GTE = greater_than(N,OUTCAP,true);
+  inline constexpr circuit GTE = unsigned_greater_than(N,OUTCAP,true); // TODO: signed
 
   template<u64 N, u64 WIDTH> requires (N>=2)
   inline constexpr auto MUX = mux(N,WIDTH,OUTCAP);
@@ -2782,29 +2782,29 @@ namespace hcm {
 
     template<valtype T1, arith T2>
     friend val<1> operator!= (T1&&, T2);
-    
-    template<valtype T1, valtype T2>
+
+    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator> (T1&&, T2&&);
 
-    template<valtype T1, arith T2>
+    template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator> (T1&&, T2);
 
-    template<valtype T1, valtype T2>
+    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator< (T1&&, T2&&);
     
-    template<valtype T1, arith T2>
+    template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator< (T1&&, T2);
     
-    template<valtype T1, valtype T2>
+    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator>= (T1&&, T2&&);
 
-    template<valtype T1, arith T2>
+    template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator>= (T1&&, T2);
     
-    template<valtype T1, valtype T2>
+    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator<= (T1&&, T2&&);
 
-    template<valtype T1, arith T2>
+    template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator<= (T1&&, T2);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
@@ -3238,7 +3238,7 @@ namespace hcm {
     [[nodiscard]] auto shift_left(U && x) & // lvalue
     {
       static_assert(std::unsigned_integral<atype>);
-      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(std::unsigned_integral<base<U>>);
       static_assert(N!=0);
       static_assert(U::size!=0);
       auto data = get();
@@ -3265,7 +3265,7 @@ namespace hcm {
     [[nodiscard]] auto shift_left(U && x) && // rvalue
     {
       static_assert(std::unsigned_integral<atype>);
-      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(std::unsigned_integral<base<U>>);
       static_assert(N!=0);
       static_assert(U::size!=0);
       auto data = std::move(*this).get();
@@ -3292,7 +3292,7 @@ namespace hcm {
     [[nodiscard]] auto shift_right(U && x) & // lvalue
     {
       static_assert(std::unsigned_integral<atype>);
-      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(std::unsigned_integral<base<U>>);
       static_assert(N!=0);
       static_assert(U::size!=0);
       auto data = get();
@@ -3328,7 +3328,7 @@ namespace hcm {
     [[nodiscard]] auto shift_right(U && x) && // rvalue
     {
       static_assert(std::unsigned_integral<atype>);
-      static_assert(std::unsigned_integral<typename U::type>);
+      static_assert(std::unsigned_integral<base<U>>);
       static_assert(N!=0);
       static_assert(U::size!=0);
       auto data = std::move(*this).get();
@@ -3675,7 +3675,7 @@ namespace hcm {
   val<1> operator== (T1&& x1, T2 x2)
   {
     constexpr circuit reduc = NOR<valt<T1>::size>;
-    circuit c = INV * ones<valt<T1>::size>(x2) + reduc; // not constexpr
+    const circuit c = INV * ones<valt<T1>::size>(x2) + reduc; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_equal(v1,x2), t1+c.delay()};
@@ -3703,7 +3703,7 @@ namespace hcm {
   val<1> operator!= (T1&& x1, T2 x2)
   {
     constexpr circuit reduc = OR<valt<T1>::size>;
-    circuit c = INV * ones<valt<T1>::size>(x2) + reduc; // not constexpr
+    const circuit c = INV * ones<valt<T1>::size>(x2) + reduc; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_different(v1,x2), t1+c.delay()};
@@ -3716,7 +3716,7 @@ namespace hcm {
   }
 
   // GREATER THAN
-  template<valtype T1, valtype T2>
+  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   val<1> operator> (T1&& x1, T2&& x2)
   {
     static_assert(valt<T1>::size == valt<T2>::size);
@@ -3727,23 +3727,27 @@ namespace hcm {
     return {is_greater(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, arith T2> // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
   val<1> operator> (T1&& x1, T2 x2)
   {
-    constexpr circuit c = GT<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    constexpr u64 N = valt<T1>::size;
+    static_assert(N!=0);
+    constexpr circuit comp = GT<N>;
+    constexpr circuit comp0 = (N==1)? circuit{} : (std::signed_integral<base<T1>>)? NOR<N-1> + NOR<2> : OR<N>;
+    const circuit &c = (x2==0)? comp0 : comp; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_greater(v1,x2), t1+c.delay()};
   }
 
-  template<arith T1, valtype T2> // first argument is a constant
+  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
   val<1> operator> (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) < x1;
   }
-  
+
   // LESS THAN
-  template<valtype T1, valtype T2>
+  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   val<1> operator< (T1&& x1, T2&& x2)
   {
     static_assert(valt<T1>::size == valt<T2>::size);
@@ -3754,23 +3758,25 @@ namespace hcm {
     return {is_less(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, arith T2> // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
   val<1> operator< (T1&& x1, T2 x2)
   {
-    constexpr circuit c = GT<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    constexpr circuit comp = GT<valt<T1>::size>;
+    constexpr circuit comp0;
+    const circuit &c = (x2==0)? comp0 : comp; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_less(v1,x2), t1+c.delay()};
   }
 
-  template<arith T1, valtype T2> // first argument is a constant
+  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
   val<1> operator< (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) > x1;
   }
 
   // GREATER THAN OR EQUAL
-  template<valtype T1, valtype T2>
+  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   val<1> operator>= (T1&& x1, T2&& x2)
   {
     static_assert(valt<T1>::size == valt<T2>::size);
@@ -3781,23 +3787,25 @@ namespace hcm {
     return {is_greater_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, arith T2> // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
   val<1> operator>= (T1&& x1, T2 x2)
   {
-    constexpr circuit c = GTE<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    constexpr circuit comp = GTE<valt<T1>::size>;
+    constexpr circuit comp0 = (std::signed_integral<base<T1>>)? INV : circuit{};
+    const circuit &c = (x2==0)? comp0 : comp; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_greater_equal(v1,x2), t1+c.delay()};
   }
 
-  template<arith T1, valtype T2> // first argument is a constant
+  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
   val<1> operator>= (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) <= x1;
   }
   
   // LESS THAN OR EQUAL
-  template<valtype T1, valtype T2>
+  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   val<1> operator<= (T1&& x1, T2&& x2)
   {
     static_assert(valt<T1>::size == valt<T2>::size);
@@ -3808,16 +3816,20 @@ namespace hcm {
     return {is_less_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, arith T2> // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
   val<1> operator<= (T1&& x1, T2 x2)
   {
-    constexpr circuit c = GTE<valt<T1>::size>; // TODO: can simplify circuit a little bit
+    constexpr u64 N = valt<T1>::size;
+    static_assert(N!=0);
+    constexpr circuit comp = GTE<N>;
+    constexpr circuit comp0 = (N==1)? circuit{} : (std::signed_integral<base<T1>>)? NOR<N-1> + OR<2> : NOR<N>;
+    const circuit &c = (x2==0)? comp0 : comp; // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {is_less_equal(v1,x2), t1+c.delay()};
   }
 
-  template<arith T1, valtype T2> // first argument is a constant
+  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
   val<1> operator<= (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) >= x1;
@@ -4047,7 +4059,7 @@ namespace hcm {
   template<valtype T1, std::integral T2> // second argument is constant
   valt<T1> operator^ (T1&& x1, T2 x2)
   {
-    circuit c = INV * ones<valt<T1>::size>(x2); // not constexpr
+    const circuit c = INV * ones<valt<T1>::size>(x2); // not constexpr
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {v1^x2, t1+c.delay()};
@@ -4106,7 +4118,7 @@ namespace hcm {
   template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
   void execute(T &&mask, const A &f)
   {
-    static_assert(std::unsigned_integral<typename valt<T>::type>);
+    static_assert(std::unsigned_integral<base<T>>);
     auto prev_exec = exec;
     auto [m,t] = proxy::get_vt(std::forward<T>(mask));
     for (u64 i=0; i<valt<T>::size; i++) {
@@ -4129,7 +4141,7 @@ namespace hcm {
   auto execute(T &&mask, const A &f)
   {
     static_assert(valtype<return_type<A>>);
-    static_assert(std::unsigned_integral<typename valt<T>::type>);
+    static_assert(std::unsigned_integral<base<T>>);
     constexpr u64 N = valt<T>::size;
     using rtype = valt<return_type<A>>;
     auto prev_exec = exec;
