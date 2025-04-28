@@ -60,10 +60,16 @@ namespace hcm {
   using f32 = float;
   using f64 = double;
 
-  template<u64> struct fo {};
-
+#ifdef ENABLE_FP
   template<typename T>
   concept arith = std::integral<T> || std::floating_point<T>;
+#else
+  template<typename T>
+  concept arith = std::integral<T>;
+#endif
+
+  template<arith auto N>
+  struct hard {};
 
   template<typename T, typename X, typename Y>
   concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
@@ -568,6 +574,12 @@ namespace hcm {
     }
   };
 
+
+  // We assume static CMOS implementation for all gates.
+  // We do not consider pass-transistor logic (Zimmermann & Fichtner, IEEE JSSC, july 1997)
+  // Standard cell libraries use PTL only in a few gates (XOR, MUX)
+  // Chinazzo et al., ICECS 2022, "Investigation of pass transistor logic in a 12nm FinFET CMOS technology"
+
   struct inv : basic_gate { // inverter
     constexpr inv() : basic_gate(2,{INVCAP},INVCAP,INVCAP) {}
   };
@@ -599,12 +611,12 @@ namespace hcm {
   struct inv_tri : mux_inv_tri { // tristate inverter
     constexpr inv_tri() : mux_inv_tri(1) {}
   };
-  
+
   struct xor_cpl : basic_gate { // a,~a,b,~b ==> a^b
     constexpr xor_cpl() : basic_gate(8,{2+2*GAMMA},4+4*GAMMA,8+8*GAMMA) {}
   };
 
-  using xnor_cpl = xor_cpl; // a,~a,b,~b ==> ~(a^b)
+  using xnor_cpl = xor_cpl; // a,~a,b,~b ==> ~(a^b) = (~a)^b
 
   template<f64 STAGE_EFFORT=DSE>
   constexpr u64 num_stages(f64 path_effort, bool odd=false)
@@ -1174,6 +1186,7 @@ namespace hcm {
       f64 x0 = sqrt(sqrt(b/a));
       f64 x1 = x0 / (1.-1./(4*a*pow(x0,3)));
       if (x1 >= x0) {
+	// always true if co has reasonable value (>=INVCAP)
 	assert(f(x0)<=x0 && f(x1)>=x1);
 	f64 xm = (x0+x1)/2;
 	for (u64 i=0; i<20; i++) {
@@ -1268,24 +1281,36 @@ namespace hcm {
     // tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
     // wiring not modeled
+    if (icount.empty()) return {};
     u64 n = icount.size(); // number of columns
-    assert(n!=0);    
+    assert(n!=0);
     u64 cmax = *std::max_element(icount.begin(),icount.end());
-    u64 cmin = *std::min_element(icount.begin(),icount.end());
-    assert(cmin!=0);
     if (cmax<=2) {
-      // done
+      // final CPA
+      assert(loadcap.empty());
       circuit output;
       output.ci = co;
-      u64 right_trim = 0;
-      for (u64 i=0; i<n && icount[i]==1; i++) right_trim++;
-      if (cmax == 2) {
-	// carry propagate addition
-	output = adder_ks(n-right_trim,co);	
+      u64 i2 = 0;
+      bool need_cpa = false;
+      for (u64 i=0; i<=n; i++) {
+	if (i==n || icount.at(i)==0) {
+	  if (need_cpa) {
+	    circuit cpa = adder_ks(i-i2,co);
+	    output = output || cpa;
+	    for (u64 j=i2; j<i; j++) loadcap.push_back(cpa.ci);
+	    need_cpa = false;
+	  }
+	  if (i<n) loadcap.push_back(0);
+	} else if (! need_cpa) {
+	  if (icount.at(i)==1) {
+	    loadcap.push_back(co);
+	  } else {
+	    assert(icount.at(i)==2);
+	    need_cpa = true;
+	    i2 = i;
+	  }
+	}
       }
-      assert(loadcap.empty());
-      for (u64 i=0; i<right_trim; i++) loadcap.push_back(co);
-      for (u64 i=right_trim; i<n; i++) loadcap.push_back(output.ci);
       return output;
     }
     // Wallace tree
@@ -1294,17 +1319,17 @@ namespace hcm {
     std::vector<u64> n2 (n+1,0);
     std::vector<u64> ocount (n+1,0);
     for (u64 i=0; i<n; i++) {
-      n3[i] = icount[i]/3;
+      n3[i] = icount.at(i)/3;
       n2[i] = 0;
-      u64 r = icount[i]%3;
+      u64 r = icount.at(i)%3;
       if (r==2) {
 	n2[i] = 1;
 	r = 0;
       }
-      ocount[i] += n3[i] + n2[i] + r;
-      ocount[i+1] += n3[i] + n2[i];
+      ocount.at(i) += n3[i] + n2[i] + r;
+      ocount.at(i+1) += n3[i] + n2[i];
     }
-    if (ocount[n]==0) ocount.pop_back();
+    if (ocount.at(n)==0) ocount.pop_back();
     circuit csa = csa_tree(ocount,co,loadcap);
     circuit stage;
     for (u64 i=0; i<n; i++) {
@@ -1328,10 +1353,12 @@ namespace hcm {
 
   constexpr circuit multiplier(u64 n, u64 m, f64 co)
   {
-    // multiplies two unsigned integers X (n bits) and Y (m bits)
+    // multiply two unsigned integers X (n bits) and Y (m bits)
     // X is the multiplier, Y the multiplicand
-    assert(n>1 && m>1);
-    if (n>m) return multiplier(m,n,co); // faster and more energy efficient
+    if (n>m) {
+      return multiplier(m,n,co); // faster and more energy efficient
+    }
+    assert(m>=n && n>=1);
     u64 cols = m+n-1; // number of CSA columns
     std::vector<u64> count (cols,n); // number of bits per CSA column
     for (u64 i=1; i<n; i++) {
@@ -1341,10 +1368,37 @@ namespace hcm {
     circuit sum = carry_save_adder(count,co); // sum all partial products
     // compute partial products as ~(~a+~b)
     circuit pp1 = nor{2}.make(sum.ci); // partial product (one bit)
-    // as inputs have high fanout if n or m is large, we need buffering
+    // inputs have high fanout if n or m is large, buffering needed
     circuit bufx = buffer(pp1.ci*m,true); // inverting buffer
     circuit bufy = buffer(pp1.ci*n,true); // inverting buffer
     return (bufx * n || bufy * m) + pp1 * (m*n) + sum;
+  }
+
+
+  template<u64 N>
+  constexpr circuit multiplier(u64 m, f64 co)
+  {
+    // multiply an m-bit unsigned integer multiplicand by a fixed, known multiplier N
+    constexpr std::bitset<std::bit_width(N)> n {N};
+    u64 cols = m+n.size()-1; // number of CSA columns
+    std::vector<u64> count (cols,0); // number of bits per CSA column
+    for (u64 i=0; i<n.size(); i++) {
+      if (n[i])
+	for (u64 j=0; j<m; j++) count.at(i+j)++;
+    }
+    std::vector<f64> loadcap;
+    circuit sum = csa_tree(count,co,loadcap); // sum all partial products
+    // inputs may have high fanout, buffering needed
+    assert(loadcap.size()>=cols);
+    circuit buf;
+    for (u64 j=0; j<m; j++) {
+      f64 icap = 0;
+      for (u64 i=0; i<n.size(); i++) {
+	if (n[i]) icap += loadcap.at(i+j);
+      }
+      buf = buf || buffer(icap,false);
+    }
+    return buf + sum;
   }
 
 
@@ -2076,9 +2130,6 @@ namespace hcm {
   template<u64 N> requires (N>=2)
   inline constexpr circuit XOR = reduction(N,[](f64 co){return xor2(co);},OUTCAP);
 
-  template<u64 N> requires (N>=2)
-  inline constexpr circuit XNOR = XOR<N>;
-  
   template<u64 WIDTH>
   inline constexpr circuit ADD = adder_ks<false,false>(WIDTH,OUTCAP);
 
@@ -2141,9 +2192,12 @@ namespace hcm {
     return tree * DATABITS;
   }();
 
-  // signed mul: roughly same complexity as unsigned
-  template<u64 N, u64 M> requires (N>=2 && M>=2)
-  inline constexpr circuit IMUL = multiplier(N,M,OUTCAP);
+  // signed mul has roughly same complexity as unsigned
+  template<u64 N, u64 M>
+  inline constexpr circuit IMUL = multiplier(N,M,OUTCAP); // N-bit x M-bit
+
+  template<u64 HARDN, u64 M>
+  inline constexpr circuit HIMUL = multiplier<HARDN>(M,OUTCAP); // M-bit x HARDN
 
 
   // ###########################
@@ -2263,7 +2317,7 @@ namespace hcm {
   } exec;
 
 
-  template<arith T>
+  template<typename T> requires (std::integral<T> || std::floating_point<T>)
   class global {
     friend class globals;
     friend class ::simulator;
@@ -2545,8 +2599,8 @@ namespace hcm {
     template<valtype U>
     val(U &&x) : val{std::forward<U>(x).get(),x.time()} {} // list initialization
 
-    template<u64 FO>
-    void fanout(fo<FO>) & // lvalue
+    template<arith auto FO>
+    void fanout(hard<FO>) & // lvalue
     {
 #ifndef FREE_FANOUT
       static_assert(FO>=2);
@@ -2673,21 +2727,22 @@ namespace hcm {
       return {y,t+c.delay()};
     }
 
-    template<u64 M>
-    arr<val,M> replicate(fo<M>) & // lvalue
+    template<arith auto M>
+    arr<val,M> replicate(hard<M>) & // lvalue
     {
       // only the user knows the actual fanout (>=M) and can set it
+      static_assert(M>=2);
       arr<val,M> a;
       for (u64 i=0; i<M; i++) a[i] = *this;
       return a;
     }
 
-    template<u64 M>
-    arr<val,M> replicate(fo<M>) && // rvalue
+    template<arith auto M>
+    arr<val,M> replicate(hard<M>) && // rvalue
     {
       // the user cannot set the fanout (rvalue), but the fanout is known
       static_assert(M>=2);
-      fanout(fo<M>{});
+      fanout(hard<M>{});
       arr<val,M> a;
       for (u64 i=0; i<M; i++) a[i] = std::move(*this);
       return a;
@@ -2825,20 +2880,17 @@ namespace hcm {
     template<std::integral T1, valtype T2> requires (ival<T2>)
     friend auto operator- (T1, T2&&);
 
-    template<valtype T1, valtype T2>  requires (ival<T1> && ival<T2>)
-    friend valt<T1> operator<< (T1&&, T2&&);
-
     template<valtype T1, std::integral T2> requires (ival<T1>)
     friend valt<T1> operator<< (T1&&, T2);
-    
-    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1> operator>> (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
     friend valt<T1> operator>> (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend auto operator* (T1&&, T2&&);
+
+    template<valtype T1, arith auto N2> requires (ival<T1>)
+    friend auto operator* (T1&&, hard<N2>);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend valt<T1> operator/ (T1&&, T2&&);
@@ -3133,10 +3185,11 @@ namespace hcm {
       }
     }
 
-    template<u64 FO>
-    void fanout(fo<FO>) & // lvalue
+    template<arith auto FO>
+    void fanout(hard<FO>) & // lvalue
     {
-      for (auto &e : elem) e.fanout(fo<FO>{});
+      static_assert(FO>=2);
+      for (auto &e : elem) e.fanout(hard<FO>{});
     }
 
     [[nodiscard]] arr&& fo1() & // lvalue
@@ -3908,18 +3961,9 @@ namespace hcm {
     proxy::update_logic(c);
     return rtype{x1-v2, t2+c.delay()};
   }
-  
-  // LEFT SHIFT
-  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1> operator<< (T1&& x1, T2&& x2)
-  {
-    // TODO
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1<<v2, std::max(t1,t2)};
-  }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>)
+  // LEFT SHIFT
+  template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
   valt<T1> operator<< (T1&& x1, T2 x2)
   {
     // no transistors
@@ -3928,16 +3972,7 @@ namespace hcm {
   }
 
   // RIGHT SHIFT
-  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1> operator>> (T1&& x1, T2&& x2)
-  {
-    // TODO
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1>>v2, std::max(t1,t2)};
-  }
-
-  template<valtype T1, std::integral T2> requires (ival<T1>)
+  template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
   valt<T1> operator>> (T1&& x1, T2 x2)
   {
     // no transistors
@@ -3957,6 +3992,23 @@ namespace hcm {
     return rtype{v1*v2, std::max(t1,t2)+c.delay()};
   }
 
+  template<valtype T1, arith auto N2> requires (ival<T1>) // 2nd argument is hard value
+  auto operator* (T1&& x1, hard<N2>)
+  {
+    // multiply first argument by fixed, known multiplier N
+    constexpr circuit c = HIMUL<u64(N2),valt<T1>::size>; // FIXME: signed multiplication
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    using rtype = val<valt<T1>::size+std::bit_width(u64(N2)),decltype(v1*N2)>;
+    return rtype{v1*N2, t1+c.delay()};
+  }
+
+  template<arith auto N1, valtype T2> requires (ival<T2>) // 1st argument is hard value
+  auto operator* (hard<N1> x1, T2&& x2)
+  {
+    return x2 * x1;
+  }
+  
   // DIVISION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1> operator/ (T1&& x1, T2&& x2)
@@ -4085,7 +4137,7 @@ namespace hcm {
   template<valtype T1, valtype T2, valtype... T>
   auto concat(T1&& x1, T2&& x2, T&&... x)
   {
-    // no transistors (TODO: wires)
+    // no transistors (wires not modeled, TODO?)
     if constexpr (sizeof...(x)==0) {
       return proxy::concat2(std::forward<T1>(x1),std::forward<T2>(x2));
     } else {

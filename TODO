@@ -1,6 +1,8 @@
 * ROM
 
-* missing operations: <<, >>, %, /
+* division by known N
+
+* modulo known N
 
 * integer FMA
 
@@ -16,6 +18,9 @@
 
 * is there a SRAM cost function that makes the SRAM behavior monotonic?
 
-To do eventually (but not priority):
+########################################
+To do eventually (maybe):
+
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
+
 * floating point
