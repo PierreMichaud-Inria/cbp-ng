@@ -3996,10 +3996,11 @@ namespace hcm {
   auto operator* (T1&& x1, hard<N2>)
   {
     // multiply first argument by fixed, known multiplier N
-    constexpr circuit c = HIMUL<u64(N2),valt<T1>::size>; // FIXME: signed multiplication
+    constexpr u64 N = (N2>=0)? N2 : truncate<std::bit_width(u64(-N2-1))+1>(N2);
+    constexpr circuit c = HIMUL<N,valt<T1>::size>; // FIXME: signed multiplication
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<valt<T1>::size+std::bit_width(u64(N2)),decltype(v1*N2)>;
+    using rtype = val<valt<T1>::size+std::bit_width(N),decltype(v1*N2)>;
     return rtype{v1*N2, t1+c.delay()};
   }
 
