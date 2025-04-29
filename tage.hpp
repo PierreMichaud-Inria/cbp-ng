@@ -67,8 +67,8 @@ template<u64 N>
 [[nodiscard]] val<N> update_ctr(val<N> ctr, val<1> incr)
 {
   ctr.fanout(hard<6>{});
-  val<N> incsat = select(ctr==ctr.maxval,ctr,val<N>{ctr+1});
-  val<N> decsat = select(ctr==ctr.minval,ctr,val<N>{ctr-1});
+  val<N> incsat = select(ctr==hard<ctr.maxval>{},ctr,val<N>{ctr+1});
+  val<N> decsat = select(ctr==hard<ctr.minval>{},ctr,val<N>{ctr-1});
   return select(incr.fo1(),incsat.fo1(),decsat.fo1());
 }
 
@@ -174,17 +174,17 @@ struct tage : predictor {
     match.fanout(hard<2>{});
     match1 = match.priority_encode();
     match1.fanout(hard<8>{});
-    pred1 = (match1 & preds) != 0;
+    pred1 = (match1 & preds) != hard<0>{};
     pred1.fanout(hard<3>{});
     // find second longest match
     match2 = (match^match1).priority_encode();
     match2.fanout(hard<2>{});
-    pred2 = (match2 & preds) != 0;
+    pred2 = (match2 & preds) != hard<0>{};
     pred2.fanout(hard<3>{});
 #ifdef USE_META
     meta.fanout(hard<2>{});
-    arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==WEAK0) | (readc[i]==WEAK1);};
-    newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & ~readu.concat()) != 0;
+    arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==hard<WEAK0>{}) | (readc[i]==hard<WEAK1>{});};
+    newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & ~readu.concat()) != hard<0>{};
     newly_alloc.fanout(hard<2>{});
     prediction = select(newly_alloc & val<1>{meta>>(METABITS-1)},pred2,pred1);
 #else
@@ -218,7 +218,7 @@ struct tage : predictor {
     auto collamask1 = collamask.priority_encode();
     collamask1.fanout(hard<2>{});
     auto collamask2 = (collamask^collamask1).priority_encode();
-    auto collamask12 = select(val<2>{rand()}==0, collamask2.fo1(), collamask1);
+    auto collamask12 = select(val<2>{rand()}==hard<0>{}, collamask2.fo1(), collamask1);
     auto allocmask = collamask12.fo1().reverse();
     allocmask.fanout(hard<3>{});
     auto match1_split = match1.make_array(val<1>{});
@@ -237,7 +237,7 @@ struct tage : predictor {
     umask.fanout(hard<2>{});
     auto umask_split = umask.make_array(val<1>{});
     // if all post entries have the u bit set, reset their u bits
-    auto noalloc = (candallocmask == 0);
+    auto noalloc = (candallocmask == hard<0>{});
     auto uclearmask = postmask & noalloc.fo1().replicate(hard<NUMG>{}).concat();
     execute(umask | allocmask | uclearmask.fo1(), [&](u64 i) {
       ubit[i].write(gi[i],select(umask_split[i].fo1(),goodpred,val<1>{0}));

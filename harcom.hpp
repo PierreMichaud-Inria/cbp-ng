@@ -69,7 +69,20 @@ namespace hcm {
 #endif
 
   template<arith auto N>
-  struct hard {};
+  struct hard {
+    using type = decltype(N);
+    static constexpr type value = N;
+    constexpr operator type() {return N;}
+  };
+
+  template<typename T>
+  concept hardval  = requires(const T &x) {[]<arith auto N>(const hard<N>&){}(x);};
+
+  template<typename T>
+  concept intlike = std::integral<T> || (hardval<T> && std::integral<typename T::type>);
+
+  template<typename T>
+  concept arithlike = arith<T> || (hardval<T> && arith<typename T::type>);
 
   template<typename T, typename X, typename Y>
   concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
@@ -163,7 +176,23 @@ namespace hcm {
 
   template<arith T>
   constexpr u64 bitwidth = (std::same_as<T,bool>)? 1 : sizeof(T)*8;
-  
+
+  template<std::integral T>
+  constexpr u64 minbits(T x)
+  {
+    // minimum number of bits to encode value x
+    if constexpr (std::unsigned_integral<T>) {
+      return std::bit_width(x);
+    } else {
+      static_assert(std::signed_integral<T>);
+      if (x>=0) {
+	return std::bit_width(u64(x))+1;
+      } else {
+	return std::bit_width(u64(-x-1))+1;
+      }
+    }
+  }
+
   template<u64 N, std::integral T>
   constexpr auto truncate(T x)
   {
@@ -175,7 +204,7 @@ namespace hcm {
   }
 
   template<u64 N, arith T>
-  auto ones(T x)
+  constexpr auto ones(T x)
   {
     return std::popcount(truncate<N>(to_unsigned(x)));
   }
@@ -2573,12 +2602,12 @@ namespace hcm {
 
     val() {}
 
-    val(std::integral auto x, u64 t=0) requires std::integral<T> : data(fit(x))
+    val(intlike auto x, u64 t=0) requires std::integral<T> : data(fit(x))
     {
       set_time(t);
     }
 
-    val(std::integral auto x, u64 t=0) : data(x)
+    val(intlike auto x, u64 t=0) : data(x)
     {
       set_time(t);
     }
@@ -2825,17 +2854,23 @@ namespace hcm {
     template<u64,u64> friend class split;
     template<memdatatype,u64> friend class ram;
     template<u64,u64,arith> friend class rom;
-    
+
     template<valtype T1, valtype T2>
     friend val<1> operator== (T1&&, T2&&);
 
     template<valtype T1, arith T2>
     friend val<1> operator== (T1&&, T2);
-    
+
+    template<valtype T1, hardval T2>
+    friend val<1> operator== (T1&&, T2);    
+
     template<valtype T1, valtype T2>
     friend val<1> operator!= (T1&&, T2&&);
 
     template<valtype T1, arith T2>
+    friend val<1> operator!= (T1&&, T2);
+
+    template<valtype T1, hardval T2>
     friend val<1> operator!= (T1&&, T2);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
@@ -2844,28 +2879,40 @@ namespace hcm {
     template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator> (T1&&, T2);
 
+    template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>)
+    friend val<1> operator> (T1&&, T2);
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator< (T1&&, T2&&);
     
     template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator< (T1&&, T2);
-    
+
+    template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>)
+    friend val<1> operator< (T1&&, T2);
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator>= (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator>= (T1&&, T2);
-    
+
+    template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>)
+    friend val<1> operator>= (T1&&, T2);
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend val<1> operator<= (T1&&, T2&&);
 
     template<valtype T1, std::integral T2> requires (ival<T1>)
     friend val<1> operator<= (T1&&, T2);
 
+    template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>)
+    friend val<1> operator<= (T1&&, T2);
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend auto operator+ (T1&&, T2&&);
 
-    template<valtype T1, std::integral T2> requires (ival<T1>)
+    template<valtype T1, intlike T2> requires (ival<T1>)
     friend auto operator+ (T1&&, T2);
 
     template<valtype T>
@@ -2874,23 +2921,23 @@ namespace hcm {
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend auto operator- (T1&&, T2&&);
 
-    template<valtype T1, std::integral T2> requires (ival<T1>)
+    template<valtype T1, intlike T2> requires (ival<T1>)
     friend auto operator- (T1&&, T2);
     
-    template<std::integral T1, valtype T2> requires (ival<T2>)
+    template<intlike T1, valtype T2> requires (ival<T2>)
     friend auto operator- (T1, T2&&);
 
-    template<valtype T1, std::integral T2> requires (ival<T1>)
+    template<valtype T1, intlike T2> requires (ival<T1>)
     friend valt<T1> operator<< (T1&&, T2);
 
-    template<valtype T1, std::integral T2> requires (ival<T1>)
+    template<valtype T1, intlike T2> requires (ival<T1>)
     friend valt<T1> operator>> (T1&&, T2);
     
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend auto operator* (T1&&, T2&&);
 
-    template<valtype T1, arith auto N2> requires (ival<T1>)
-    friend auto operator* (T1&&, hard<N2>);
+    template<valtype T1, intlike T2> requires (ival<T1>)
+    friend auto operator* (T1&&, T2);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend valt<T1> operator/ (T1&&, T2&&);
@@ -2907,13 +2954,13 @@ namespace hcm {
     template<valtype T1, valtype T2>
     friend valt<T1,T2> operator& (T1&&, T2&&);
 
-    template<valtype T1, std::integral T2>
+    template<valtype T1, intlike T2>
     friend valt<T1> operator& (T1&&, T2);
 
     template<valtype T1, valtype T2>
     friend valt<T1,T2> operator| (T1&&, T2&&);
 
-    template<valtype T1, std::integral T2>
+    template<valtype T1, intlike T2>
     friend valt<T1> operator| (T1&&, T2);
     
     template<valtype T1, valtype T2>
@@ -2921,7 +2968,10 @@ namespace hcm {
 
     template<valtype T1, std::integral T2>
     friend valt<T1> operator^ (T1&&, T2);
-    
+
+    template<valtype T1, hardval T2>
+    friend valt<T1> operator^ (T1&&, T2);
+
     template<valtype T>
     friend valt<T> operator~ (T&&);
 
@@ -3734,7 +3784,17 @@ namespace hcm {
     return {is_equal(v1,x2), t1+c.delay()};
   }
 
-  template<arith T1, valtype T2> // first argument is a constant
+  template<valtype T1, hardval T2> // second argument is a hard constant
+  val<1> operator== (T1&& x1, T2 x2)
+  {
+    constexpr circuit reduc = NOR<valt<T1>::size>;
+    constexpr circuit c = INV * ones<valt<T1>::size>(x2.value) + reduc;
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {is_equal(v1,x2.value), t1+c.delay()};
+  }
+  
+  template<arithlike T1, valtype T2> // first argument is a constant
   val<1> operator== (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) == x1;
@@ -3762,7 +3822,17 @@ namespace hcm {
     return {is_different(v1,x2), t1+c.delay()};
   }
 
-  template<arith T1, valtype T2> // first argument is a constant
+  template<valtype T1, hardval T2> // second argument is a hard constant
+  val<1> operator!= (T1&& x1, T2 x2)
+  {
+    constexpr circuit reduc = OR<valt<T1>::size>;
+    constexpr circuit c = INV * ones<valt<T1>::size>(x2.value) + reduc;
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {is_different(v1,x2.value), t1+c.delay()};
+  }
+
+  template<arithlike T1, valtype T2> // first argument is a constant
   val<1> operator!= (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) != x1;
@@ -3780,7 +3850,7 @@ namespace hcm {
     return {is_greater(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is constant
   val<1> operator> (T1&& x1, T2 x2)
   {
     constexpr u64 N = valt<T1>::size;
@@ -3793,7 +3863,20 @@ namespace hcm {
     return {is_greater(v1,x2), t1+c.delay()};
   }
 
-  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
+  template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>) // second argument is hard constant
+  val<1> operator> (T1&& x1, T2 x2)
+  {
+    constexpr u64 N = valt<T1>::size;
+    static_assert(N!=0);
+    constexpr circuit comp = GT<N>;
+    constexpr circuit comp0 = (N==1)? circuit{} : (std::signed_integral<base<T1>>)? NOR<N-1> + NOR<2> : OR<N>;
+    constexpr circuit c = (x2.value==0)? comp0 : comp; // TODO: specialize more
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {is_greater(v1,x2.value), t1+c.delay()};
+  }
+
+  template<intlike T1, valtype T2> requires (ival<T2>) // first argument is constant
   val<1> operator> (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) < x1;
@@ -3811,7 +3894,7 @@ namespace hcm {
     return {is_less(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is constant
   val<1> operator< (T1&& x1, T2 x2)
   {
     constexpr circuit comp = GT<valt<T1>::size>;
@@ -3822,7 +3905,18 @@ namespace hcm {
     return {is_less(v1,x2), t1+c.delay()};
   }
 
-  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
+  template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>) // second argument is hard constant
+  val<1> operator< (T1&& x1, T2 x2)
+  {
+    constexpr circuit comp = GT<valt<T1>::size>;
+    constexpr circuit comp0;
+    constexpr circuit c = (x2.value==0)? comp0 : comp; // TODO: specialize more
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {is_less(v1,x2.value), t1+c.delay()};
+  }
+
+  template<intlike T1, valtype T2> requires (ival<T2>) // first argument is constant
   val<1> operator< (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) > x1;
@@ -3840,7 +3934,7 @@ namespace hcm {
     return {is_greater_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is constant
   val<1> operator>= (T1&& x1, T2 x2)
   {
     constexpr circuit comp = GTE<valt<T1>::size>;
@@ -3851,7 +3945,18 @@ namespace hcm {
     return {is_greater_equal(v1,x2), t1+c.delay()};
   }
 
-  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
+  template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>) // second argument is hard constant
+  val<1> operator>= (T1&& x1, T2 x2)
+  {
+    constexpr circuit comp = GTE<valt<T1>::size>;
+    constexpr circuit comp0 = (std::signed_integral<base<T1>>)? INV : circuit{};
+    constexpr circuit c = (x2.value==0)? comp0 : comp; // TODO: specialize more
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {is_greater_equal(v1,x2.value), t1+c.delay()};
+  }
+
+  template<intlike T1, valtype T2> requires (ival<T2>) // first argument is constant
   val<1> operator>= (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) <= x1;
@@ -3869,7 +3974,7 @@ namespace hcm {
     return {is_less_equal(v1,v2), std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // second argument is constant
   val<1> operator<= (T1&& x1, T2 x2)
   {
     constexpr u64 N = valt<T1>::size;
@@ -3882,7 +3987,20 @@ namespace hcm {
     return {is_less_equal(v1,x2), t1+c.delay()};
   }
 
-  template<std::integral T1, valtype T2> requires (ival<T2>) // first argument is a constant
+  template<valtype T1, hardval T2> requires (ival<T1> && intlike<T2>) // second argument is hard constant
+  val<1> operator<= (T1&& x1, T2 x2)
+  {
+    constexpr u64 N = valt<T1>::size;
+    static_assert(N!=0);
+    constexpr circuit comp = GTE<N>;
+    constexpr circuit comp0 = (N==1)? circuit{} : (std::signed_integral<base<T1>>)? NOR<N-1> + OR<2> : NOR<N>;
+    constexpr circuit c = (x2.value==0)? comp0 : comp; // TODO: specialize more
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {is_less_equal(v1,x2.value), t1+c.delay()};
+  }
+
+  template<intlike T1, valtype T2> requires (ival<T2>) // first argument is constant
   val<1> operator<= (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) >= x1;
@@ -3900,18 +4018,18 @@ namespace hcm {
     return rtype{v1+v2, std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
+  template<valtype T1, intlike T2> requires (ival<T1>) // 2nd arg constant
   auto operator+ (T1&& x1, T2 x2)
   {
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1+x2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1>::size+1),decltype(v1+x2)>;
     if (x2==0) return rtype{v1,t1};
-    constexpr circuit c = INC<valt<T1>::size>;
+    constexpr circuit c = INC<valt<T1>::size>; // TODO: specialize more
     proxy::update_logic(c);
     return rtype{v1+x2, t1+c.delay()};
   }  
 
-  template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
+  template<intlike T1, valtype T2> requires (ival<T2>) // 1st arg constant 
   auto operator+ (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) + x1;
@@ -3940,30 +4058,30 @@ namespace hcm {
     return rtype{v1-v2, std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
+  template<valtype T1, intlike T2> requires (ival<T1>) // 2nd arg constant
   auto operator- (T1&& x1, T2 x2)
   {
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1-x2)>;
+    using rtype = val<std::min(val<64>::size,valt<T1>::size+1),decltype(v1-x2)>;
     if (x2==0) return rtype{v1,t1};
-    constexpr circuit c = INC<valt<T1>::size>;
+    constexpr circuit c = INC<valt<T1>::size>; // TODO: specialize more
     proxy::update_logic(c);
     return rtype{v1-x2, t1+c.delay()};
   }
 
-  template<std::integral T1, valtype T2> requires (ival<T2>) // 1st arg constant 
+  template<intlike T1, valtype T2> requires (ival<T2>) // 1st arg constant 
   auto operator- (T1 x1, T2&& x2)
   {
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(x1-v2)>;
+    using rtype = val<std::min(val<64>::size,valt<T2>::size+1),decltype(x1-v2)>;
     if (x1==0) return rtype{-v2,t2};
-    constexpr circuit c = INC<valt<T2>::size>;
+    constexpr circuit c = INC<valt<T2>::size>; // TODO: specialize more
     proxy::update_logic(c);
     return rtype{x1-v2, t2+c.delay()};
   }
 
   // LEFT SHIFT
-  template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
+  template<valtype T1, intlike T2> requires (ival<T1>) // 2nd arg constant
   valt<T1> operator<< (T1&& x1, T2 x2)
   {
     // no transistors
@@ -3972,7 +4090,7 @@ namespace hcm {
   }
 
   // RIGHT SHIFT
-  template<valtype T1, std::integral T2> requires (ival<T1>) // 2nd arg constant
+  template<valtype T1, intlike T2> requires (ival<T1>) // 2nd arg constant
   valt<T1> operator>> (T1&& x1, T2 x2)
   {
     // no transistors
@@ -3992,24 +4110,31 @@ namespace hcm {
     return rtype{v1*v2, std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, arith auto N2> requires (ival<T1>) // 2nd argument is hard value
-  auto operator* (T1&& x1, hard<N2>)
+  template<valtype T1, intlike T2> requires (ival<T1>) // 2nd argument is constant
+  auto operator* (T1&& x1, T2 x2)
   {
-    // multiply first argument by fixed, known multiplier N
-    constexpr u64 N = (N2>=0)? N2 : truncate<std::bit_width(u64(-N2-1))+1>(N2);
-    constexpr circuit c = HIMUL<N,valt<T1>::size>; // FIXME: signed multiplication
+    static_assert(hardval<T2>,"fixed argument must be a hard constant (hard<N>{})");
+    constexpr u64 u2 = (x2>=0)? x2 : truncate<minbits(x2.value)>(x2.value); // convert x2 to unsigned
+    constexpr circuit c = HIMUL<u2,valt<T1>::size>; // FIXME: signed multiplication
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<valt<T1>::size+std::bit_width(N),decltype(v1*N2)>;
-    return rtype{v1*N2, t1+c.delay()};
+    if constexpr (std::unsigned_integral<decltype(v1*x2)>) {
+      using rtype = val<minbits(x1.maxval*u2),decltype(v1*x2)>;
+      return rtype{v1*x2, t1+c.delay()};
+    } else {
+      static_assert(std::signed_integral<decltype(v1*x2)>);
+      constexpr u64 rsize = std::min(minbits(x1.maxval*x2),minbits(x1.minval*x2));
+      using rtype = val<rsize,decltype(v1*x2)>;
+      return rtype{v1*x2, t1+c.delay()};
+    }
   }
 
-  template<arith auto N1, valtype T2> requires (ival<T2>) // 1st argument is hard value
-  auto operator* (hard<N1> x1, T2&& x2)
+  template<intlike T1, valtype T2> requires (ival<T2>) // 1st argument is constant
+  auto operator* (T1 x1, T2&& x2)
   {
-    return x2 * x1;
+    return std::forward<T2>(x2) * x1;
   }
-  
+
   // DIVISION
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   valt<T1> operator/ (T1&& x1, T2&& x2)
@@ -4020,7 +4145,7 @@ namespace hcm {
     return {v1/v2, std::max(t1,t2)};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // divisor is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // divisor is constant
   valt<T1> operator/ (T1&& x1, T2 x2)
   {
     // TODO
@@ -4038,7 +4163,7 @@ namespace hcm {
     return {v1%v2, std::max(t1,t2)};
   }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // modulus is a constant
+  template<valtype T1, std::integral T2> requires (ival<T1>) // modulus is constant
   valt<T2> operator% (T1&& x1, T2 x2)
   {
     // TODO
@@ -4057,7 +4182,7 @@ namespace hcm {
     return {v1&v2, std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> // second argument is constant
+  template<valtype T1, intlike T2> // second argument is constant
   valt<T1> operator& (T1&& x1, T2 x2)
   {
     // no transistors
@@ -4065,7 +4190,7 @@ namespace hcm {
     return {v1&x2, t1};
   }
 
-  template<std::integral T1, valtype T2> // first argument is constant
+  template<intlike T1, valtype T2> // first argument is constant
   valt<T2> operator& (T1 x1, T2&& x2)
   {
     // no transistors
@@ -4083,7 +4208,7 @@ namespace hcm {
     return {v1|v2, std::max(t1,t2)+c.delay()};
   }
 
-  template<valtype T1, std::integral T2> // second argument is constant
+  template<valtype T1, intlike T2> // second argument is constant
   valt<T1> operator| (T1&& x1, T2 x2)
   {
     // no transistors
@@ -4091,7 +4216,7 @@ namespace hcm {
     return {v1|x2, t1};
   }
 
-  template<std::integral T1, valtype T2> // first argument is constant
+  template<intlike T1, valtype T2> // first argument is constant
   valt<T2> operator| (T1 x1, T2&& x2)
   {
     // no transistors
@@ -4118,7 +4243,16 @@ namespace hcm {
     return {v1^x2, t1+c.delay()};
   }
 
-  template<std::integral T1, valtype T2> // first argument is constant
+  template<valtype T1, hardval T2> // second argument is hard constant
+  valt<T1> operator^ (T1&& x1, T2 x2)
+  {
+    constexpr circuit c = INV * ones<valt<T1>::size>(x2.value);
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1^x2, t1+c.delay()};
+  }
+
+  template<intlike T1, valtype T2> // first argument is constant
   valt<T2> operator^ (T1 x1, T2&& x2)
   {
     return std::forward<T2>(x2) ^ x1;
