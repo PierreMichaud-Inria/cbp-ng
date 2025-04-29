@@ -3085,6 +3085,7 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
+    friend class ::simulator;
   public:
     static constexpr u64 size = N;
     using type = T;
@@ -3120,7 +3121,7 @@ namespace hcm {
     auto get() & // lvalue
     {
       std::array<atype,N> b;
-      for (int i=0; i<N; i++) b[i] = elem[i].get();
+      for (u64 i=0; i<N; i++) b[i] = elem[i].get();
       return b;
     }
 
