@@ -1,7 +1,5 @@
 * ROM
 
-* division by known N
-
 * modulo known N
 
 * integer FMA

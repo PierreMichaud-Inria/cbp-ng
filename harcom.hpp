@@ -313,6 +313,29 @@ namespace hcm {
     }
   }
 
+  template<u64 N>
+  constexpr std::array<bool,N> fractional(u64 a, u64 b)
+  {
+    assert(a<b);
+    // returns the first N bits of the (binary) fractional part of a/b
+    // least significant bit (rightmost) is at position 0 of the array
+    std::array<bool,N> frac;
+    const u64 halfb = b/2 + (b&1);
+    for (u64 i=0; i<N; i++) {
+      if (a >= halfb) {
+	// 2a >= b
+	frac.at(N-1-i) = 1;
+	a = 2*a-b;
+      } else {
+	// 2a < b
+	frac.at(N-1-i) = 0;
+	a = 2*a;
+      }
+      assert(a<b);
+    }
+    return frac;
+  }
+
 
   // ###########################
 
@@ -1404,11 +1427,10 @@ namespace hcm {
   }
 
 
-  template<u64 N>
-  constexpr circuit multiplier(u64 m, f64 co)
+  template<typename T>
+  constexpr circuit multiply_by_constant(const T &n, u64 m, f64 co)
   {
-    // multiply an m-bit unsigned integer multiplicand by a fixed, known multiplier N
-    constexpr std::bitset<std::bit_width(N)> n {N};
+    // multiply an m-bit unsigned integer multiplicand by a fixed, known multiplier n
     u64 cols = m+n.size()-1; // number of CSA columns
     std::vector<u64> count (cols,0); // number of bits per CSA column
     for (u64 i=0; i<n.size(); i++) {
@@ -1428,6 +1450,33 @@ namespace hcm {
       buf = buf || buffer(icap,false);
     }
     return buf + sum;
+  }
+
+
+  template<u64 N, u64 D>
+  constexpr circuit divide_by_constant(f64 co)
+  {
+    // quotient of the Euclidean division on N-bit unsigned integer by fixed, known unsigned divisor D
+    static_assert(D!=0);
+    if constexpr (D==1) {
+      return {};
+    } else if constexpr ((D&1)==0) {
+      // even divisor
+      constexpr u64 Dodd = D >> std::countr_zero(D); 
+      return divide_by_constant<N,Dodd>(co);
+    } else {
+      // odd divisor
+      static_assert((D&1) && D>=3);
+      constexpr u64 M = std::bit_width(D-2);
+      std::array<bool,N+M> INVD = fractional<N+M>(1,D);
+      std::array<bool,N+M+1> IDP1 {}; // INVD+1
+      for (u64 i=0; i<INVD.size(); i++) IDP1[i] = INVD[i];
+      for (u64 i=0; i<IDP1.size(); i++) {
+	IDP1[i] ^= 1;
+	if (IDP1[i]) break;
+      }
+      return multiply_by_constant(IDP1,N,co); // TODO: full multiplier not needed (N+M low bits of mult ignored)
+    }
   }
 
 
@@ -2226,8 +2275,14 @@ namespace hcm {
   inline constexpr circuit IMUL = multiplier(N,M,OUTCAP); // N-bit x M-bit
 
   template<u64 HARDN, u64 M>
-  inline constexpr circuit HIMUL = multiplier<HARDN>(M,OUTCAP); // M-bit x HARDN
+  inline constexpr circuit HIMUL = [] () {
+    std::bitset<std::bit_width(HARDN)> N {HARDN};
+    return multiply_by_constant(N,M,OUTCAP); // HARDN x M-bit
+  }();
 
+  template<u64 N, u64 HARDD>
+  inline constexpr circuit UDIV = divide_by_constant<N,HARDD>(OUTCAP); // unsigned N-bit / HARDD
+  
 
   // ###########################
 
@@ -2939,11 +2994,8 @@ namespace hcm {
     template<valtype T1, intlike T2> requires (ival<T1>)
     friend auto operator* (T1&&, T2);
 
-    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T1> operator/ (T1&&, T2&&);
-
-    template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T1> operator/ (T1&&, T2);
+    template<valtype T1, intlike T2> requires (ival<T1>)
+    friend auto operator/ (T1&&, T2);
 
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend valt<T2> operator% (T1&&, T2&&);
@@ -4114,9 +4166,9 @@ namespace hcm {
   template<valtype T1, intlike T2> requires (ival<T1>) // 2nd argument is constant
   auto operator* (T1&& x1, T2 x2)
   {
-    static_assert(hardval<T2>,"fixed argument must be a hard constant (hard<N>{})");
+    static_assert(hardval<T2>,"constant argument must be a hard value (hard<N>{})");
     constexpr u64 u2 = (x2>=0)? x2 : truncate<minbits(x2.value)>(x2.value); // convert x2 to unsigned
-    constexpr circuit c = HIMUL<u2,valt<T1>::size>; // FIXME: signed multiplication
+    constexpr circuit c = HIMUL<u2,valt<T1>::size>; // TODO: signed multiplication
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     if constexpr (std::unsigned_integral<decltype(v1*x2)>) {
@@ -4137,21 +4189,17 @@ namespace hcm {
   }
 
   // DIVISION
-  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T1> operator/ (T1&& x1, T2&& x2)
+  template<valtype T1, intlike T2> requires (ival<T1>) // divisor is constant
+  auto operator/ (T1&& x1, T2 x2)
   {
-    // TODO
+    static_assert(hardval<T2>,"divisor must be a hard constant (hard<N>{})");
+    static_assert(std::unsigned_integral<base<T1>>,"signed division not implemented"); // TODO
+    static_assert(x2>0,"signed division not implemented"); // TODO
+    constexpr circuit c = UDIV<valt<T1>::size,x2>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1/v2, std::max(t1,t2)};
-  }
-
-  template<valtype T1, std::integral T2> requires (ival<T1>) // divisor is constant
-  valt<T1> operator/ (T1&& x1, T2 x2)
-  {
-    // TODO
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1/x2, t1};
+    using rtype = val<std::bit_width(x1.maxval/x2),decltype(v1/x2)>;
+    return rtype{v1/x2, t1+c.delay()};
   }
   
   // MODULO (REMAINDER)
