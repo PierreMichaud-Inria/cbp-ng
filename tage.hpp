@@ -205,7 +205,7 @@ struct tage : predictor {
     auto altdiff = (match2 != 0) & (pred2 != pred1);
     altdiff.fanout(hard<1+NUMG>{});
 #ifdef USE_META
-    execute(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
+    execute_if(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
 #endif
     auto mispmask = mispred.replicate(hard<NUMG>{}).concat();
     auto postmask = mispmask.fo1() & val<NUMG>(match1-1);
@@ -224,14 +224,14 @@ struct tage : predictor {
     auto match1_split = match1.make_array(val<1>{});
     match1_split.fanout(hard<2>{});
     // update the bimodal counter if it provided the prediction
-    execute(match1_split[NUMG], [&](){bim.write(bi,update_ctr(readb,dir));});
+    execute_if(match1_split[NUMG], [&](){bim.write(bi,update_ctr(readb,dir));});
     // update the global counter if it provided the prediction or is in the allocated entry
-    execute(val<NUMG>{match1} | allocmask, [&](u64 i) {
+    execute_if(val<NUMG>{match1} | allocmask, [&](u64 i) {
       auto newgctr = select(match1_split[i], update_ctr(readc[i],dir), select(dir,val<CTR>{WEAK1},val<CTR>{WEAK0}));
       gctr[i].write(gi[i],newgctr.fo1());
     });
     // update the tag in the allocated entry
-    execute(allocmask, [&](u64 i){gtag[i].write(gi[i],gt[i]);});
+    execute_if(allocmask, [&](u64 i){gtag[i].write(gi[i],gt[i]);});
     // update the ubit
     auto umask = (val<NUMG>{match1} & altdiff.replicate(hard<NUMG>{}).concat()); // u bit of providing entry
     umask.fanout(hard<2>{});
@@ -239,7 +239,7 @@ struct tage : predictor {
     // if all post entries have the u bit set, reset their u bits
     auto noalloc = (candallocmask == hard<0>{});
     auto uclearmask = postmask & noalloc.fo1().replicate(hard<NUMG>{}).concat();
-    execute(umask | allocmask | uclearmask.fo1(), [&](u64 i) {
+    execute_if(umask | allocmask | uclearmask.fo1(), [&](u64 i) {
       ubit[i].write(gi[i],select(umask_split[i].fo1(),goodpred,val<1>{0}));
     });
     // update path history

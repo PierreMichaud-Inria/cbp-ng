@@ -314,12 +314,11 @@ namespace hcm {
   }
 
   template<u64 N>
-  constexpr std::array<bool,N> fractional(u64 a, u64 b)
+  constexpr void fractional(u64 a, u64 b, std::array<bool,N> &frac)
   {
     assert(a<b);
     // returns the first N bits of the (binary) fractional part of a/b
     // least significant bit (rightmost) is at position 0 of the array
-    std::array<bool,N> frac;
     const u64 halfb = b/2 + (b&1);
     for (u64 i=0; i<N; i++) {
       if (a >= halfb) {
@@ -333,7 +332,6 @@ namespace hcm {
       }
       assert(a<b);
     }
-    return frac;
   }
 
 
@@ -953,7 +951,7 @@ namespace hcm {
     return dec;
   }
 
-  
+
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit decode2(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/)
   {
@@ -1468,9 +1466,10 @@ namespace hcm {
       // odd divisor
       static_assert((D&1) && D>=3);
       constexpr u64 M = std::bit_width(D-2);
-      std::array<bool,N+M> INVD = fractional<N+M>(1,D);
+      std::array<bool,N+M> INVD {};
+      fractional<N+M>(1,D,INVD); // INVD = 2^(N+M) / D
       std::array<bool,N+M+1> IDP1 {}; // INVD+1
-      for (u64 i=0; i<INVD.size(); i++) IDP1[i] = INVD[i];
+      std::copy(INVD.begin(),INVD.end(),IDP1.begin());
       for (u64 i=0; i<IDP1.size(); i++) {
 	IDP1[i] ^= 1;
 	if (IDP1[i]) break;
@@ -1653,6 +1652,42 @@ namespace hcm {
       tree = tree + inv{}.make(co);
     }
     return tree;
+  }
+
+
+  template<u64 N, u64 M>
+  constexpr circuit pseudo_rom(const std::array<std::bitset<M>,N> &data, f64 co)
+  {
+    // N x M-bit ROM array
+    // emulate a ROM with CMOS logic ==> only for small ROM (TODO: ROM array)
+    // wiring is ignored (FIXME)
+    static_assert(M!=0);
+    static_assert(N!=0);
+    std::array<u64,M> col1 {}; // number of ones per column
+    for (u64 i=0; i<N; i++) {
+      for (u64 j=0; j<M; j++) {
+	col1[j] += data[i][j];
+      }
+    }
+    circuit cols;
+    // each column is implemented as a multi-input OR gate
+    std::array<circuit,M> col;
+    f64 bias = 1./N; // assume words have equal probability to be read
+    for (u64 j=0; j<M; j++) {
+      col[j] = oring(col1[j],co,1,bias);
+      cols = cols || col[j];
+    }
+    f64 maxloadcap = 0;
+    for (u64 i=0; i<N; i++) {
+      f64 loadcap = 0;
+      for (u64 j=0; j<M; j++) {
+	loadcap += col[j].ci * data[i][j];
+      }
+      maxloadcap = std::max(maxloadcap,loadcap);
+    }
+    circuit dec = decode2(N,maxloadcap);
+    circuit buf = buffer(dec.ci,false) * std::bit_width(N-1);
+    return buf + dec + cols;
   }
 
 
@@ -2186,7 +2221,7 @@ namespace hcm {
     (sram<llround(E0*pow(X,I)),D>::print("E="+std::to_string(llround(E0*pow(X,I)))+": "),...);
   }  
 
-
+  
   // ###########################
 
   inline constexpr f64 OUTCAP = INVCAP;
@@ -2282,7 +2317,12 @@ namespace hcm {
 
   template<u64 N, u64 HARDD>
   inline constexpr circuit UDIV = divide_by_constant<N,HARDD>(OUTCAP); // unsigned N-bit / HARDD
-  
+
+  template<u64 N, u64 M>
+  constexpr circuit ROM(const std::array<std::bitset<M>,N> &data)
+  {
+    return pseudo_rom(data,OUTCAP);
+  }
 
   // ###########################
 
@@ -2388,8 +2428,8 @@ namespace hcm {
     template<memdatatype,u64> friend class ram;
     friend class globals;
     template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
-      friend void execute(T&&,const A&);
-    template<valtype T, action A> friend auto execute(T&&,const A&);
+      friend void execute_if(T&&,const A&);
+    template<valtype T, action A> friend auto execute_if(T&&,const A&);
   private:
     bool active = true;
     u64 time = 0;
@@ -2516,7 +2556,6 @@ namespace hcm {
     template<u64,u64> friend class split;
     template<valtype, u64> friend class arr;
     template<memdatatype,u64> friend class ram;
-    template<u64,u64,arith> friend class rom;
     friend class proxy;
     friend class ::simulator;
 
@@ -2812,7 +2851,7 @@ namespace hcm {
     }
 
     template<arith auto M>
-    arr<val,M> replicate(hard<M>) & // lvalue
+    [[nodiscard]] arr<val,M> replicate(hard<M>) & // lvalue
     {
       // only the user knows the actual fanout (>=M) and can set it
       static_assert(M>=2);
@@ -2822,7 +2861,7 @@ namespace hcm {
     }
 
     template<arith auto M>
-    arr<val,M> replicate(hard<M>) && // rvalue
+    [[nodiscard]] arr<val,M> replicate(hard<M>) && // rvalue
     {
       // the user cannot set the fanout (rvalue), but the fanout is known
       static_assert(M>=2);
@@ -2831,7 +2870,6 @@ namespace hcm {
       for (u64 i=0; i<M; i++) a[i] = std::move(*this);
       return a;
     }
-
   };
 
 
@@ -2908,7 +2946,7 @@ namespace hcm {
     template<valtype,u64> friend class arr;
     template<u64,u64> friend class split;
     template<memdatatype,u64> friend class ram;
-    template<u64,u64,arith> friend class rom;
+    template<valtype,u64> friend class rom;
 
     template<valtype T1, valtype T2>
     friend val<1> operator== (T1&&, T2&&);
@@ -3034,10 +3072,10 @@ namespace hcm {
     friend valt<T1,T2> select(T&&, T1&&, T2&&);
 
     template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
-    friend void execute(T&&,const A&);
+    friend void execute_if(T&&,const A&);
 
     template<valtype T, action A>
-    friend auto execute(T&&,const A&);  
+    friend auto execute_if(T&&,const A&);  
   };
 
 
@@ -3262,7 +3300,7 @@ namespace hcm {
 
     T& operator[] (u64 i)
     {
-      assert(i<N);
+      assert(i<N && "array bound check");
       return elem[i];
     }
 
@@ -3271,14 +3309,14 @@ namespace hcm {
     {
       // only for reading
       // we do not bother providing an rvalue version
-      static_assert(ival<U>);
+      static_assert(ival<U>,"index must be an integer");
       static_assert(N>=1);
       if constexpr (N>=2) {
 	constexpr auto c = MUX<N,T::size>;
 	panel.update_logic(c[0]); // MUX select
 	panel.update_logic(c[1]); // MUX data
 	auto [i,ti] = std::forward<U>(index).get_vt();
-	assert(i<N);
+	assert(i<N && "array bound check");
 	auto [d,td] = elem[i].get_vt(); // lvalue
 	auto t = std::max(ti+c[0].delay(),td) + c[1].delay();
 	return {d,t};
@@ -3779,37 +3817,80 @@ namespace hcm {
     }
   };
 
-  
+
   // ###########################
-  
-  template<u64 N, u64 M, arith T = u64>
-  class rom {
-    val<M,T> a[N]; // TODO: make it raw data instead
+
+
+  template<u64 N, u64 M>
+  class rom_content {
+    template<valtype,u64> friend class rom;
+    using T = std::bitset<M>;
+    std::array<T,N> data;
     
+    template<std::convertible_to<T> U>
+    constexpr rom_content(std::initializer_list<U> l)
+    {
+      assert(l.size()==N && "the list size must match the ROM size");
+      std::copy(l.begin(),l.end(),data.begin());
+    }
+
+    template<std::convertible_to<T> U>
+    constexpr rom_content(const U (&a)[N])
+    {
+      std::copy(a,a+N,data.begin());
+    }
+
+    template<std::convertible_to<T> U>
+    constexpr rom_content(const std::array<U,N> &a)
+    {
+      std::copy(a.begin(),a.end(),data.begin());
+    }
+
+    constexpr rom_content(unaryfunc<u64,T> auto f)
+    {
+      for (u64 i=0; i<N; i++) {
+	data[i] = f(i);
+      }
+    }
+
+    auto operator[] (u64 i) const
+    {
+      assert(i<N && "ROM array bound check");
+      return data[i].to_ullong();
+    }
+  };
+
+
+  template<valtype T, u64 N>
+  class rom {
+    static_assert(! regtype<T>);
+    static_assert(N!=0);
+
+    const rom_content<N,T::size> content;
+    const circuit hw;
+
   public:
 
-    template<std::convertible_to<T> U>
-    rom(std::initializer_list<U> l)
-    {
-      assert(l.size() == N);
-      int i = 0;
-      for (auto e : l) a[i++] = e;       
-    }
+    rom() = delete;
 
     template<std::convertible_to<T> U>
-    rom(U (&x)[N])
-    {
-      for (int i=0; i<N; i++) a[i] = x[i];
-    }
+    constexpr rom(std::initializer_list<U> l) : content(l), hw(ROM(content.data)) {}
+
+    template<std::convertible_to<T> U>
+    constexpr rom(const U (&a)[N]) : content(a), hw(ROM(content.data)) {}
+
+    template<std::convertible_to<T> U>
+    constexpr rom(const std::array<U,N> &a) : content(a), hw(ROM(content.data)) {}
+
+    constexpr rom(unaryfunc<u64,T> auto f) : content(f), hw(ROM(content.data)) {}
 
     template<ival U>
-    val<M,T> read(U && address)
+    T operator() (U && address) const
     {
+      proxy::update_logic(hw);
       auto [i,t] = proxy::get_vt(std::forward<U>(address));
-      assert(i<N);
-      //TODO: energy and delay
-      return {proxy::get(a[i]),t};
-    }    
+      return {content[i],t+hw.delay()};
+    }
   };
 
 
@@ -4352,7 +4433,7 @@ namespace hcm {
 
   // CONDITIONAL EXECUTION
   template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
-  void execute(T &&mask, const A &f)
+  void execute_if(T &&mask, const A &f)
   {
     static_assert(std::unsigned_integral<base<T>>);
     auto prev_exec = exec;
@@ -4374,7 +4455,7 @@ namespace hcm {
 
 
   template<valtype T, action A>
-  auto execute(T &&mask, const A &f)
+  auto execute_if(T &&mask, const A &f)
   {
     static_assert(valtype<return_type<A>>);
     static_assert(std::unsigned_integral<base<T>>);
