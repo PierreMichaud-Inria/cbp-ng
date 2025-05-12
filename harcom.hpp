@@ -1658,9 +1658,10 @@ namespace hcm {
   template<u64 N, u64 M>
   constexpr circuit pseudo_rom(const std::array<std::bitset<M>,N> &data, f64 co)
   {
-    // N x M-bit ROM array
+    // N x M-bit ROM
     // emulate a ROM with CMOS logic ==> only for small ROM (TODO: ROM array)
-    // wiring is ignored (FIXME)
+    // TODO: would it be reasonable to minimize logic at compile time (Espresso heuristic?)
+    // wiring is ignored (TODO?)
     static_assert(M!=0);
     static_assert(N!=0);
     std::array<u64,M> col1 {}; // number of ones per column
@@ -2275,7 +2276,7 @@ namespace hcm {
   inline constexpr auto MUX = mux(N,WIDTH,OUTCAP);
 
   template<u64 N>
-  constexpr circuit priority_encoder = []() {
+  inline constexpr circuit priority_encoder = []() {
     static_assert(N!=0);
     if constexpr (N==1) {
       return circuit{};
@@ -2323,6 +2324,7 @@ namespace hcm {
   {
     return pseudo_rom(data,OUTCAP);
   }
+
 
   // ###########################
 
@@ -2660,6 +2662,10 @@ namespace hcm {
 
     static constexpr u64 size = N;
     using type = T;
+
+#ifdef CHEATING_MODE
+    operator T() {return data;}
+#endif
 
     u64 time() const
     {
