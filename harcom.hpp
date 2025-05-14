@@ -1345,7 +1345,8 @@ namespace hcm {
   {
     // tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
-    // obits is the number of rightmost bits returned (for modulo operator)
+    // loadcap = input capacitances of the returned circuit (output parameter)
+    // obits is the number of rightmost bits returned (for the remainder operator)
     // wiring not modeled
     if (icount.empty()) return {};
     u64 n = icount.size(); // number of columns
@@ -1396,12 +1397,11 @@ namespace hcm {
       ocount.at(i+1) += n3[i] + n2[i];
     }
     if (ocount.at(n)==0 || n==obits) ocount.pop_back();
-    circuit csa = csa_tree(ocount,co,loadcap);
+    circuit csa = csa_tree(ocount,co,loadcap,obits);
     circuit stage;
     for (u64 i=0; i<n; i++) {
       if (n3[i]==0 && n2[i]==0) continue;
-      assert(i+1<loadcap.size());
-      f64 ocap = std::max(loadcap[i],loadcap[i+1]);
+      f64 ocap = (i+1<loadcap.size())? std::max(loadcap[i],loadcap[i+1]) : loadcap[i];
       circuit col = full_adder(ocap) * n3[i] || half_adder(ocap) * n2[i];
       stage = stage || col;
       loadcap[i] = col.ci;
@@ -1733,10 +1733,10 @@ namespace hcm {
     static_assert(MAXK<R);
     constexpr auto t = pow2_plusminus1(D,MAXK);
     constexpr u64 K = std::get<0>(t); // bits per digit
-    constexpr u64 PM = std::get<1>(t); // +/-1
+    constexpr auto PM = std::get<1>(t); // +/-1
     static_assert((K && PM) || (!K && !PM));
     constexpr u64 ND = (K)? (N+K-1)/K : 0; // number of digits
-    static_assert(ND!=0);
+    static_assert(K==0 || ND!=0);
     constexpr u64 NS = (PM>0)? ND:ND+1; // number of summands
     constexpr u64 NN = K + std::bit_width(NS); // reduce input to NN bits
     constexpr std::bitset<OBITS> EXTRA = (ND^(ND&1)) % D; // extra summand (PM<0)
@@ -1764,7 +1764,7 @@ namespace hcm {
       constexpr u64 ncols = (PM>0)? K : std::max(K,OBITS);
       std::vector<u64> count (ncols,0);
       for (u64 i=0; i<K; i++) {
-	count.at(i) = (i < N%K)? ND : ND-1;
+	count.at(i) = (N%K==0 || i<N%K)? ND : ND-1;
       }
       if (PM<0) {
 	// one extra summand
@@ -1778,7 +1778,7 @@ namespace hcm {
 	for (u64 i=0; i<N; i++)
 	  bufs = bufs || buffer(loadcap[i%K],false);
       } else {
-	// we alternate the sign of digits
+	// every other digit is complemented
 	for (u64 i=0; i<N; i++)
 	  bufs = bufs || buffer(loadcap[i%K],(i/K)&1);
       }
