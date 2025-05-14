@@ -334,6 +334,21 @@ namespace hcm {
     }
   }
 
+  constexpr std::tuple<u64,int> pow2_plusminus1(u64 m, u64 nmax)
+  {
+    // returns the smallest n <= nmax, n>0, such that 2^n+1 or 2^n-1 is a multiple of m, with m odd
+    if (!(m&1)) return {0,0}; // m even
+    if (m==1) return {1,1};
+    assert(m>=3);
+    u64 modm = 2;
+    for (u64 n=1; n<=nmax; n++) {
+      if (modm == 1) return {n,1}; // 2^n-1 is a multiple of m
+      else if (modm == m-1) return {n,-1}; // 2^n+1 is a multiple of m
+      modm = (modm*2) % m;
+    }
+    return {0,0}; // n does not exist
+  }
+
 
   // ###########################
 
@@ -1326,10 +1341,11 @@ namespace hcm {
   }
 
 
-  constexpr circuit csa_tree(const std::vector<u64> &icount, f64 co, std::vector<f64> &loadcap)
+  constexpr circuit csa_tree(const std::vector<u64> &icount, f64 co, std::vector<f64> &loadcap, u64 obits=0)
   {
     // tree of full adders (FA) and half adders (HA)
     // icount vector = number of bits per column (not necessarily uniform)
+    // obits is the number of rightmost bits returned (for modulo operator)
     // wiring not modeled
     if (icount.empty()) return {};
     u64 n = icount.size(); // number of columns
@@ -1379,7 +1395,7 @@ namespace hcm {
       ocount.at(i) += n3[i] + n2[i] + r;
       ocount.at(i+1) += n3[i] + n2[i];
     }
-    if (ocount.at(n)==0) ocount.pop_back();
+    if (ocount.at(n)==0 || n==obits) ocount.pop_back();
     circuit csa = csa_tree(ocount,co,loadcap);
     circuit stage;
     for (u64 i=0; i<n; i++) {
@@ -1426,24 +1442,28 @@ namespace hcm {
 
 
   template<typename T>
-  constexpr circuit multiply_by_constant(const T &n, u64 m, f64 co)
+  constexpr circuit multiply_by_constant(const T &n, u64 m, f64 co, u64 obits=0)
   {
     // multiply an m-bit unsigned integer multiplicand by a fixed, known multiplier n
+    // if obits!=0, it is the number of rightmost bits returned (for modulo operator)
     u64 cols = m+n.size()-1; // number of CSA columns
+    if (obits) cols = std::min(cols,obits);
     std::vector<u64> count (cols,0); // number of bits per CSA column
     for (u64 i=0; i<n.size(); i++) {
       if (n[i])
-	for (u64 j=0; j<m; j++) count.at(i+j)++;
+	for (u64 j=0; j<m; j++)
+	  if (i+j < cols) count.at(i+j)++;
     }
     std::vector<f64> loadcap;
-    circuit sum = csa_tree(count,co,loadcap); // sum all partial products
+    circuit sum = csa_tree(count,co,loadcap,obits); // sum all partial products
     // inputs may have high fanout, buffering needed
     assert(loadcap.size()>=cols);
     circuit buf;
     for (u64 j=0; j<m; j++) {
       f64 icap = 0;
       for (u64 i=0; i<n.size(); i++) {
-	if (n[i]) icap += loadcap.at(i+j);
+	if (i+j < loadcap.size() && n[i])
+	  icap += loadcap.at(i+j);
       }
       buf = buf || buffer(icap,false);
     }
@@ -1454,17 +1474,23 @@ namespace hcm {
   template<u64 N, u64 D>
   constexpr circuit divide_by_constant(f64 co)
   {
-    // quotient of the Euclidean division on N-bit unsigned integer by fixed, known unsigned divisor D
+    // quotient of the Euclidean division of N-bit unsigned integer by fixed, known unsigned divisor D
     static_assert(D!=0);
     if constexpr (D==1) {
       return {};
+    } else if constexpr (std::bit_width(D)>N) {
+      return {};
     } else if constexpr ((D&1)==0) {
       // even divisor
-      constexpr u64 Dodd = D >> std::countr_zero(D); 
-      return divide_by_constant<N,Dodd>(co);
+      constexpr u64 factor2 = std::countr_zero(D);
+      constexpr u64 Dodd = D >> factor2;
+      static_assert(N>=factor2);
+      return divide_by_constant<N-factor2,Dodd>(co);
     } else {
       // odd divisor
       static_assert((D&1) && D>=3);
+      // L = ceil(log2(D-1))
+      // x div D = (ceil(2^(N+L)/D) * x) div 2^(N+L)
       constexpr u64 M = std::bit_width(D-2);
       std::array<bool,N+M> INVD {};
       fractional<N+M>(1,D,INVD); // INVD = 2^(N+M) / D
@@ -1474,7 +1500,8 @@ namespace hcm {
 	IDP1[i] ^= 1;
 	if (IDP1[i]) break;
       }
-      return multiply_by_constant(IDP1,N,co); // TODO: full multiplier not needed (N+M low bits of mult ignored)
+      // TODO: full multiplier not needed (N+M rightmost result bits ignored)
+      return multiply_by_constant(IDP1,N,co);
     }
   }
 
@@ -1689,6 +1716,92 @@ namespace hcm {
     circuit dec = decode2(N,maxloadcap);
     circuit buf = buffer(dec.ci,false) * std::bit_width(N-1);
     return buf + dec + cols;
+  }
+
+
+  template<u64 N, u64 D>
+  constexpr circuit remainder_divide_by_constant(f64 co)
+  {
+    // remainder of the Euclidean division of N-bit unsigned integer by fixed, known unsigned divisor D
+    static_assert(D!=0);
+    static_assert(N!=0);
+    constexpr u64 R = 7; // log2 ROM size
+    constexpr u64 OBITS = std::bit_width(D-1); // number of output bits
+ 
+    // digital root method used when there exists a small K>0 such that 2^K = +/-1 mod D
+    constexpr u64 MAXK = 5;
+    static_assert(MAXK<R);
+    constexpr auto t = pow2_plusminus1(D,MAXK);
+    constexpr u64 K = std::get<0>(t); // bits per digit
+    constexpr u64 PM = std::get<1>(t); // +/-1
+    static_assert((K && PM) || (!K && !PM));
+    constexpr u64 ND = (K)? (N+K-1)/K : 0; // number of digits
+    static_assert(ND!=0);
+    constexpr u64 NS = (PM>0)? ND:ND+1; // number of summands
+    constexpr u64 NN = K + std::bit_width(NS); // reduce input to NN bits
+    constexpr std::bitset<OBITS> EXTRA = (ND^(ND&1)) % D; // extra summand (PM<0)
+
+    if constexpr (D==1) {
+      return {};
+    } else if constexpr (N < std::bit_width(D)) {
+      return {};
+    } else if constexpr ((D&1)==0) {
+      // even divisor
+      constexpr u64 factor2 = std::countr_zero(D);
+      constexpr u64 Dodd = D >> factor2;
+      static_assert(N>=factor2);
+      return remainder_divide_by_constant<N-factor2,Dodd>(co);
+    } else if constexpr (N<=R) {
+      constexpr u64 romsize = u64(1) << N;
+      std::array<std::bitset<OBITS>,romsize> data;
+      for (u64 i=0; i<romsize; i++) {
+	data.at(i) = i % D;
+      }
+      return pseudo_rom<romsize,OBITS>(data,co);
+    } else if constexpr (K!=0 && NN<N) {
+      // digital root method
+      circuit reduc = remainder_divide_by_constant<NN,D>(co);
+      constexpr u64 ncols = (PM>0)? K : std::max(K,OBITS);
+      std::vector<u64> count (ncols,0);
+      for (u64 i=0; i<K; i++) {
+	count.at(i) = (i < N%K)? ND : ND-1;
+      }
+      if (PM<0) {
+	// one extra summand
+	for (u64 i=0; i<OBITS; i++) count.at(i) += EXTRA[i];
+      }
+      std::vector<f64> loadcap;
+      circuit csa = csa_tree(count,reduc.ci,loadcap);
+      assert(loadcap.size()>=K);
+      circuit bufs;
+      if (PM>0) {
+	for (u64 i=0; i<N; i++)
+	  bufs = bufs || buffer(loadcap[i%K],false);
+      } else {
+	// we alternate the sign of digits
+	for (u64 i=0; i<N; i++)
+	  bufs = bufs || buffer(loadcap[i%K],(i/K)&1);
+      }
+      return bufs + csa + reduc;
+    } else {
+      // odd divisor, default method (use multiplications)
+      static_assert(D>=3);
+      // L = ceil(log2(D-1))
+      // x mod D = {[(ceil(2^(N+L)/D) * x) mod 2^(N+L)] * D} div 2^(N+L)
+      constexpr u64 M = std::bit_width(D-2);
+      std::array<bool,N+M> INVD {};
+      fractional<N+M>(1,D,INVD); // INVD = 2^(N+M) / D
+      std::array<bool,N+M+1> IDP1 {}; // INVD+1
+      std::copy(INVD.begin(),INVD.end(),IDP1.begin());
+      for (u64 i=0; i<IDP1.size(); i++) {
+	IDP1[i] ^= 1;
+	if (IDP1[i]) break;
+      }
+      constexpr std::bitset<std::bit_width(D)> Dbits {D};
+      circuit mulD = multiply_by_constant(Dbits,N+M,co); // TODO: N+M rightmost result bits ignored
+      circuit divfrac = multiply_by_constant(IDP1,N,mulD.ci,N+M); // N+M fractional bits of the division
+      return divfrac + mulD;
+    }
   }
 
 
@@ -2543,7 +2656,7 @@ namespace hcm {
     }
   } panel;
 
-  
+
   // ###########################
 
 
@@ -2560,6 +2673,7 @@ namespace hcm {
     template<memdatatype,u64> friend class ram;
     friend class proxy;
     friend class ::simulator;
+    template<valtype U, action A> friend auto execute_if(U&&,const A&);
 
   private:
     T data = 0;
@@ -2615,7 +2729,9 @@ namespace hcm {
     T get() && // rvalue
     {
       auto old_data = data;
+#ifndef FREE_FANOUT
       data = 0; // destructive read
+#endif
       return old_data;
     }
 
@@ -3302,6 +3418,16 @@ namespace hcm {
     void operator= (U &&other)
     {
       copy_from(std::forward<U>(other));
+    }
+
+    operator T() & requires (N==1) // lvalue
+    {
+      return elem[0];
+    }
+
+    operator T() && requires (N==1) // rvalue
+    {
+      return std::move(elem[0]);
     }
 
     T& operator[] (u64 i)
@@ -4458,7 +4584,6 @@ namespace hcm {
     }
     exec = prev_exec;
   }
-
 
   template<valtype T, action A>
   auto execute_if(T &&mask, const A &f)
