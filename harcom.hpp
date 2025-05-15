@@ -1442,67 +1442,32 @@ namespace hcm {
 
 
   template<typename T>
-  constexpr circuit multiply_by_constant(const T &n, u64 m, f64 co, u64 obits=0)
+  constexpr circuit multiply_by_constant(const T &N, u64 m, f64 co, u64 obits=0)
   {
-    // multiply an m-bit unsigned integer multiplicand by a fixed, known multiplier n
+    // multiply an m-bit unsigned integer multiplicand by a fixed, known multiplier N
     // if obits!=0, it is the number of rightmost bits returned (for modulo operator)
-    u64 cols = m+n.size()-1; // number of CSA columns
+    assert(N.size()>0);
+    u64 cols = m+N.size()-1; // number of CSA columns
     if (obits) cols = std::min(cols,obits);
     std::vector<u64> count (cols,0); // number of bits per CSA column
-    for (u64 i=0; i<n.size(); i++) {
-      if (n[i])
+    for (u64 i=0; i<N.size(); i++) {
+      if (N[i])
 	for (u64 j=0; j<m; j++)
 	  if (i+j < cols) count.at(i+j)++;
     }
     std::vector<f64> loadcap;
     circuit sum = csa_tree(count,co,loadcap,obits); // sum all partial products
     // inputs may have high fanout, buffering needed
-    assert(loadcap.size()>=cols);
     circuit buf;
     for (u64 j=0; j<m; j++) {
       f64 icap = 0;
-      for (u64 i=0; i<n.size(); i++) {
-	if (i+j < loadcap.size() && n[i])
+      for (u64 i=0; i<N.size(); i++) {
+	if ((i+j) < loadcap.size() && N[i])
 	  icap += loadcap.at(i+j);
       }
       buf = buf || buffer(icap,false);
     }
     return buf + sum;
-  }
-
-
-  template<u64 N, u64 D>
-  constexpr circuit divide_by_constant(f64 co)
-  {
-    // quotient of the Euclidean division of N-bit unsigned integer by fixed, known unsigned divisor D
-    static_assert(D!=0);
-    if constexpr (D==1) {
-      return {};
-    } else if constexpr (std::bit_width(D)>N) {
-      return {};
-    } else if constexpr ((D&1)==0) {
-      // even divisor
-      constexpr u64 factor2 = std::countr_zero(D);
-      constexpr u64 Dodd = D >> factor2;
-      static_assert(N>=factor2);
-      return divide_by_constant<N-factor2,Dodd>(co);
-    } else {
-      // odd divisor
-      static_assert((D&1) && D>=3);
-      // L = ceil(log2(D-1))
-      // x div D = (ceil(2^(N+L)/D) * x) div 2^(N+L)
-      constexpr u64 M = std::bit_width(D-2);
-      std::array<bool,N+M> INVD {};
-      fractional<N+M>(1,D,INVD); // INVD = 2^(N+M) / D
-      std::array<bool,N+M+1> IDP1 {}; // INVD+1
-      std::copy(INVD.begin(),INVD.end(),IDP1.begin());
-      for (u64 i=0; i<IDP1.size(); i++) {
-	IDP1[i] ^= 1;
-	if (IDP1[i]) break;
-      }
-      // TODO: full multiplier not needed (N+M rightmost result bits ignored)
-      return multiply_by_constant(IDP1,N,co);
-    }
   }
 
 
@@ -1720,15 +1685,63 @@ namespace hcm {
 
 
   template<u64 N, u64 D>
+  constexpr circuit divide_by_constant(f64 co)
+  {
+    // quotient of the Euclidean division of N-bit unsigned integer by fixed, known unsigned divisor D
+    static_assert(D!=0);
+    constexpr u64 R = 7; // log2 ROM size
+    if constexpr (D==1) {
+      return {};
+    } else if constexpr (N < std::bit_width(D)) {
+      return {};
+    } else if constexpr ((D&1)==0) {
+      // even divisor
+      constexpr u64 factor2 = std::countr_zero(D);
+      constexpr u64 Dodd = D >> factor2;
+      static_assert(N>=factor2);
+      return divide_by_constant<N-factor2,Dodd>(co);
+    } else if constexpr (N<=R) {
+      constexpr u64 romsize = u64(1) << N;
+      constexpr u64 OBITS = N - std::bit_width(D) + 1; // output bits
+      std::array<std::bitset<OBITS>,romsize> data;
+      for (u64 i=0; i<romsize; i++) {
+	data.at(i) = i / D;
+      }
+      return pseudo_rom<romsize,OBITS>(data,co);
+    } else {
+      // odd divisor
+      static_assert((D&1) && D>=3);
+      // L = ceil(log2(D-1))
+      // x div D = (ceil(2^(N+L)/D) * x) div 2^(N+L)
+      constexpr u64 M = std::bit_width(D-2);
+      std::array<bool,N+M> INVD {};
+      fractional<N+M>(1,D,INVD); // INVD = 2^(N+M) / D
+      std::array<bool,N+M+1> IDP1 {}; // INVD+1
+      std::copy(INVD.begin(),INVD.end(),IDP1.begin());
+      for (u64 i=0; i<IDP1.size(); i++) {
+	IDP1[i] ^= 1;
+	if (IDP1[i]) break;
+      }
+      // TODO: full multiplier not needed (N+M rightmost result bits ignored)
+      return multiply_by_constant(IDP1,N,co);
+    }
+  }
+
+
+  template<u64 N, u64 D>
   constexpr circuit remainder_divide_by_constant(f64 co)
   {
     // remainder of the Euclidean division of N-bit unsigned integer by fixed, known unsigned divisor D
     static_assert(D!=0);
     static_assert(N!=0);
+    if constexpr (D==1) {
+      return {};
+    }
     constexpr u64 R = 7; // log2 ROM size
     constexpr u64 OBITS = std::bit_width(D-1); // number of output bits
- 
-    // digital root method used when there exists a small K>0 such that 2^K = +/-1 mod D
+
+    // digital root (DR) method used when there exists a small K>0 such that 2^K = +/-1 mod D
+    constexpr bool enable_DR = true;
     constexpr u64 MAXK = 5;
     static_assert(MAXK<R);
     constexpr auto t = pow2_plusminus1(D,MAXK);
@@ -1741,9 +1754,7 @@ namespace hcm {
     constexpr u64 NN = K + std::bit_width(NS); // reduce input to NN bits
     constexpr std::bitset<OBITS> EXTRA = (ND^(ND&1)) % D; // extra summand (PM<0)
 
-    if constexpr (D==1) {
-      return {};
-    } else if constexpr (N < std::bit_width(D)) {
+    if constexpr (N < std::bit_width(D)) {
       return {};
     } else if constexpr ((D&1)==0) {
       // even divisor
@@ -1758,7 +1769,7 @@ namespace hcm {
 	data.at(i) = i % D;
       }
       return pseudo_rom<romsize,OBITS>(data,co);
-    } else if constexpr (K!=0 && NN<N) {
+    } else if constexpr (enable_DR && K!=0 && NN<N) {
       // digital root method
       circuit reduc = remainder_divide_by_constant<NN,D>(co);
       constexpr u64 ncols = (PM>0)? K : std::max(K,OBITS);
@@ -2431,6 +2442,9 @@ namespace hcm {
 
   template<u64 N, u64 HARDD>
   inline constexpr circuit UDIV = divide_by_constant<N,HARDD>(OUTCAP); // unsigned N-bit / HARDD
+
+  template<u64 N, u64 HARDD>
+  inline constexpr circuit UMOD = remainder_divide_by_constant<N,HARDD>(OUTCAP); // unsigned N-bit % HARDD
 
   template<u64 N, u64 M>
   constexpr circuit ROM(const std::array<std::bitset<M>,N> &data)
@@ -3157,12 +3171,9 @@ namespace hcm {
     template<valtype T1, intlike T2> requires (ival<T1>)
     friend auto operator/ (T1&&, T2);
 
-    template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-    friend valt<T2> operator% (T1&&, T2&&);
+    template<valtype T1, intlike T2> requires (ival<T1>)
+    friend auto operator% (T1&&, T2);
 
-    template<valtype T1, std::integral T2> requires (ival<T1>)
-    friend valt<T2> operator% (T1&&, T2);
-    
     template<valtype T1, valtype T2>
     friend valt<T1,T2> operator& (T1&&, T2&&);
 
@@ -4402,7 +4413,7 @@ namespace hcm {
   }
 
   // DIVISION
-  template<valtype T1, intlike T2> requires (ival<T1>) // divisor is constant
+  template<valtype T1, intlike T2> requires (ival<T1>) // constant divisor
   auto operator/ (T1&& x1, T2 x2)
   {
     static_assert(hardval<T2>,"divisor must be a hard constant (hard<N>{})");
@@ -4411,26 +4422,24 @@ namespace hcm {
     constexpr circuit c = UDIV<valt<T1>::size,x2>;
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    using rtype = val<std::bit_width(x1.maxval/x2),decltype(v1/x2)>;
+    constexpr u64 N = std::bit_width(x1.maxval/x2);
+    using rtype = val<std::max(N,u64(1)),decltype(v1/x2)>;
     return rtype{v1/x2, t1+c.delay()};
   }
-  
-  // MODULO (REMAINDER)
-  template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
-  valt<T2> operator% (T1&& x1, T2&& x2)
-  {
-    // TODO
-    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    return {v1%v2, std::max(t1,t2)};
-  }
 
-  template<valtype T1, std::integral T2> requires (ival<T1>) // modulus is constant
-  valt<T2> operator% (T1&& x1, T2 x2)
+  // MODULO (REMAINDER)
+  template<valtype T1, intlike T2> requires (ival<T1>) // constant divisor
+  auto operator% (T1&& x1, T2 x2)
   {
-    // TODO
+    static_assert(hardval<T2>,"divisor must be a hard constant (hard<N>{})");
+    static_assert(std::unsigned_integral<base<T1>>,"dividend must be unsigned");
+    static_assert(x2>0,"divisor must be positive");
+    constexpr circuit c = UMOD<valt<T1>::size,x2>;
+    proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
-    return {v1%x2, t1};
+    constexpr u64 N = std::bit_width(u64(x2)-1);
+    using rtype = val<std::max(N,u64(1)),decltype(v1%x2)>;
+    return rtype{v1%x2, t1+c.delay()};
   }
 
   // BITWISE AND
