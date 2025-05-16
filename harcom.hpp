@@ -3009,9 +3009,10 @@ namespace hcm {
       static_assert(M>=2);
       fanout(hard<M>{});
       arr<val,M> a;
-      for (u64 i=0; i<M; i++) a[i] = std::move(*this);
+      for (u64 i=0; i<M; i++) a[i] = *this;
       return a;
     }
+
   };
 
 
