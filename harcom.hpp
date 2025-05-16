@@ -42,6 +42,7 @@
 #include <array>
 #include <vector>
 #include <limits>
+#include <exception>
 
 
 class simulator; // has access to private members of class "val"
@@ -1742,8 +1743,7 @@ namespace hcm {
 
     // digital root (DR) method used when there exists a small K>0 such that 2^K = +/-1 mod D
     constexpr bool enable_DR = true;
-    constexpr u64 MAXK = 5;
-    static_assert(MAXK<R);
+    constexpr u64 MAXK = 6;
     constexpr auto t = pow2_plusminus1(D,MAXK);
     constexpr u64 K = std::get<0>(t); // bits per digit
     constexpr auto PM = std::get<1>(t); // +/-1
@@ -1769,7 +1769,7 @@ namespace hcm {
 	data.at(i) = i % D;
       }
       return pseudo_rom<romsize,OBITS>(data,co);
-    } else if constexpr (enable_DR && K!=0 && NN<N) {
+    } else if constexpr (enable_DR && K!=0 && (NN<=R || NN+1<N)) {
       // digital root method
       circuit reduc = remainder_divide_by_constant<NN,D>(co);
       constexpr u64 ncols = (PM>0)? K : std::max(K,OBITS);
@@ -2617,7 +2617,10 @@ namespace hcm {
 
     void next_cycle()
     {
-      assert(clock_cycle_ps != 0);
+      if (clock_cycle_ps == 0) {
+	std::cerr << "clock cycle must be non-null" << std::endl;
+	std::terminate();
+      }
       cycle++;
       transistors_logic[1] = transistors_logic[0];
       transistors_logic[0] = 0;
@@ -2721,7 +2724,10 @@ namespace hcm {
 	read_credit--;
       } else {
 #ifdef CHECK_FANOUT
-	assert(read_credit!=0 && "fanout exhausted");
+	if (read_credit == 0) {
+	  std::cerr<< "fanout exhausted" << std::endl;
+	  std::terminate();
+	}
 #else
 	// fanout exhausted: delay increases linearly with the number of reads
 	// delay increment is that of a FO2 inverter (wires not modeled, TODO?)	
@@ -3246,7 +3252,10 @@ namespace hcm {
 
     void create()
     {
-      assert(!panel.storage_destroyed && "all storage (reg,ram) must have the same lifetime");
+      if (panel.storage_destroyed) {
+	std::cerr << "all storage (reg,ram) must have the same lifetime" << std::endl;
+	std::terminate();
+      }
       panel.update_storage(N,stg::xtors);
     }
 
@@ -3278,7 +3287,10 @@ namespace hcm {
     template<typename U>
     void assign(U &&other)
     {
-      assert(panel.cycle>last_write_cycle && "single register write per cycle");
+      if (panel.cycle <= last_write_cycle) {
+	std::cerr << "single register write per cycle" << std::endl;
+	std::terminate();
+      }
       last_write_cycle = panel.cycle;     
       val<N,T>::operator=(std::forward<U>(other));
       panel.update_energy(stg::write_energy_fJ);
@@ -3443,8 +3455,7 @@ namespace hcm {
 
     T& operator[] (u64 i)
     {
-      assert(i<N && "array bound check");
-      return elem[i];
+      return elem.at(i);
     }
 
     template<valtype U>
@@ -3453,14 +3464,14 @@ namespace hcm {
       // only for reading
       // we do not bother providing an rvalue version
       static_assert(ival<U>,"index must be an integer");
-      static_assert(N>=1);
+      static_assert(N!=0);
+      static_assert(valt<U>::size<=std::bit_width(N-1),"index has too many bits");
       if constexpr (N>=2) {
 	constexpr auto c = MUX<N,T::size>;
 	panel.update_logic(c[0]); // MUX select
 	panel.update_logic(c[1]); // MUX data
 	auto [i,ti] = std::forward<U>(index).get_vt();
-	assert(i<N && "array bound check");
-	auto [d,td] = elem[i].get_vt(); // lvalue
+	auto [d,td] = elem.at(i).get_vt(); // lvalue
 	auto t = std::max(ti+c[0].delay(),td) + c[1].delay();
 	return {d,t};
       } else {
@@ -3871,7 +3882,7 @@ namespace hcm {
     using static_ram = sram<N,rawdata<T>::width>;
 
   private:
-    valuetype data[N];
+    std::array<valuetype,N> data;
     u64 last_read_cycle = 0;
     u64 last_write_cycle = 0;
 
@@ -3884,8 +3895,7 @@ namespace hcm {
 
       void commit(ram &mem) const
       {
-	assert(addr<N);
-	mem.data[addr] = dataval;
+	mem.data.at(addr) = dataval;
       }
     };
 
@@ -3915,7 +3925,10 @@ namespace hcm {
     template<ival TYPEA, std::convertible_to<T> TYPED>
     void write(TYPEA && address, TYPED && dataval)
     {
-      assert(panel.cycle>last_write_cycle && "single RAM write per cycle");
+      if (panel.cycle <= last_write_cycle) {
+	std::cerr << "single RAM write per cycle" << std::endl;
+	std::terminate();
+      }
       last_write_cycle = panel.cycle;
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
@@ -3929,7 +3942,10 @@ namespace hcm {
     template<ival U>
     T read(U && address)
     {
-      assert(panel.cycle>last_read_cycle && "single RAM read per cycle");
+      if (panel.cycle <= last_read_cycle) {
+	std::cerr << "single RAM read per cycle" << std::endl;
+	std::terminate();
+      }
       last_read_cycle = panel.cycle;
       if (! exec.active) return {};
       panel.update_energy(static_ram::EREAD);
@@ -3939,9 +3955,8 @@ namespace hcm {
 	std::pop_heap(writes.begin(),writes.end());
 	writes.pop_back();
       }
-      assert(addr<N);
       t += std::llround(static_ram::LATENCY); // time at which the read completes
-      T readval = data[addr];
+      T readval = data.at(addr);
       readval.set_time(t);
       return readval;
     }
@@ -3969,11 +3984,14 @@ namespace hcm {
     template<valtype,u64> friend class rom;
     using T = std::bitset<M>;
     std::array<T,N> data;
-    
+
     template<std::convertible_to<T> U>
     constexpr rom_content(std::initializer_list<U> l)
     {
-      assert(l.size()==N && "the list size must match the ROM size");
+      if (l.size() != N) {
+	std::cerr << "the list size must match the ROM size" << std::endl;
+	std::terminate();
+      }
       std::copy(l.begin(),l.end(),data.begin());
     }
 
@@ -3998,8 +4016,7 @@ namespace hcm {
 
     auto operator[] (u64 i) const
     {
-      assert(i<N && "ROM array bound check");
-      return data[i].to_ullong();
+      return data.at(i).to_ullong();
     }
   };
 
