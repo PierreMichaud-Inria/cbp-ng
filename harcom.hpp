@@ -335,20 +335,33 @@ namespace hcm {
     }
   }
 
-  constexpr std::tuple<u64,int> pow2_plusminus1(u64 m, u64 nmax)
+  constexpr u64 pow2_minus1(u64 m, u64 nmax)
   {
-    // returns the smallest n <= nmax, n>0, such that 2^n+1 or 2^n-1 is a multiple of m, with m odd
-    if (!(m&1)) return {0,0}; // m even
-    if (m==1) return {1,1};
+    // returns the smallest n <= nmax, n>0, such that 2^n-1 is a multiple of m
+    if (!(m&1)) return 0; // m even
+    if (m==1) return 1;
     assert(m>=3);
     u64 modm = 2;
     for (u64 n=1; n<=nmax; n++) {
-      if (modm == 1) return {n,1}; // 2^n-1 is a multiple of m
-      else if (modm == m-1) return {n,-1}; // 2^n+1 is a multiple of m
+      if (modm == 1) return n;
       modm = (modm*2) % m;
     }
-    return {0,0}; // n does not exist
+    return 0; // n does not exist
   }
+
+  constexpr u64 pow2_plus1(u64 m, u64 nmax)
+  {
+    // returns the smallest n <= nmax, n>0, such that 2^n+1 is a multiple of m
+    if (!(m&1)) return 0; // m even
+    if (m==1) return 1;
+    assert(m>=3);
+    u64 modm = 2;
+    for (u64 n=1; n<=nmax; n++) {
+      if (modm == m-1) return n;
+      modm = (modm*2) % m;
+    }
+    return 0; // n does not exist
+  }  
 
 
   // ###########################
@@ -1342,6 +1355,15 @@ namespace hcm {
   }
 
 
+  constexpr circuit subtract(u64 n, f64 co)
+  {
+    // A-B = A+~B+1
+    circuit c = adder_ks<false,true>(n,co);
+    return inv{}.make(c.ci) * n + c;
+    // TODO: can we specialize the adder and get rid of the inverter delay?
+  }
+
+  
   constexpr circuit csa_tree(const std::vector<u64> &icount, f64 co, std::vector<f64> &loadcap, u64 obits=0)
   {
     // tree of full adders (FA) and half adders (HA)
@@ -1697,6 +1719,7 @@ namespace hcm {
       return {};
     } else if constexpr ((D&1)==0) {
       // even divisor
+      // x div I*J = (x div I) div J
       constexpr u64 factor2 = std::countr_zero(D);
       constexpr u64 Dodd = D >> factor2;
       static_assert(N>=factor2);
@@ -1729,73 +1752,125 @@ namespace hcm {
   }
 
 
+  constexpr circuit circular_csa(u64 n, u64 m, f64 co)
+  {
+    // reduce a sum S of m n-bit digits to an n+1 bit number Y such that Y mod D = S mod D
+    // ASSUMPTION: (2^n-1) mod D = 0
+    // see Figure 2 in MICRO 2014 paper by Diamond et al. ("Arbitrary Modulus Indexing")
+    assert(n!=0);
+    assert(m>=2);
+    if (m == 2) {
+      // two digits, final CPA
+      return adder_ks(n,co);
+    }
+    // Wallace tree
+    // 2^n mod D = 1 ==> weight 2^n is equivalent to weight 1
+    // the leftmost carry feeds the rightmost column
+    // uniform number of bits per column ==> use full adders only (3:2 compression)
+    u64 mm = (m/3)*2 + m%3; // stage reduces from m to mm digits
+    circuit next = circular_csa(n,mm,co);
+    circuit stage = full_adder(next.ci) * (mm * n);
+    return stage + next;
+  }
+
+
   template<u64 N, u64 D>
   constexpr circuit remainder_divide_by_constant(f64 co)
   {
     // remainder of the Euclidean division of N-bit unsigned integer by fixed, known unsigned divisor D
+    // use digital root method when there exists a small K>0 such that 2^K = +/-1 mod D
     static_assert(D!=0);
     static_assert(N!=0);
-    if constexpr (D==1) {
-      return {};
-    }
-    constexpr u64 R = 7; // log2 ROM size
+    constexpr u64 R = 8; // log2 ROM size
+    constexpr u64 MAXKM = 12; // digital root method (2^K-1 mod D = 0), max bits per digit 
+    constexpr u64 MAXKP = 6; // digital root method (2^K+1 mod D = 0), max bits per digit
     constexpr u64 OBITS = std::bit_width(D-1); // number of output bits
 
-    // digital root (DR) method used when there exists a small K>0 such that 2^K = +/-1 mod D
-    constexpr bool enable_DR = true;
-    constexpr u64 MAXK = 6;
-    constexpr auto t = pow2_plusminus1(D,MAXK);
-    constexpr u64 K = std::get<0>(t); // bits per digit
-    constexpr auto PM = std::get<1>(t); // +/-1
-    static_assert((K && PM) || (!K && !PM));
-    constexpr u64 ND = (K)? (N+K-1)/K : 0; // number of digits
-    static_assert(K==0 || ND!=0);
-    constexpr u64 NS = (PM>0)? ND:ND+1; // number of summands
-    constexpr u64 NN = K + std::bit_width(NS); // reduce input to NN bits
-    constexpr std::bitset<OBITS> EXTRA = (ND^(ND&1)) % D; // extra summand (PM<0)
-
-    if constexpr (N < std::bit_width(D)) {
+    if constexpr (D==1) {
+      return {};
+    } else if constexpr (N < std::bit_width(D)) {
       return {};
     } else if constexpr ((D&1)==0) {
       // even divisor
+      // x mod I*J = I*[(x div I) mod J] + (x mod I) 
       constexpr u64 factor2 = std::countr_zero(D);
+      static_assert(factor2!=0);
       constexpr u64 Dodd = D >> factor2;
       static_assert(N>=factor2);
       return remainder_divide_by_constant<N-factor2,Dodd>(co);
+    } else if constexpr (N<=64 && D == (u64(1)<<N)-1) {
+      // D = 2^N-1
+      // if X=2^N-1 final=0 else final=X
+      circuit out = anding(2,co) * N;
+      circuit nand = nanding(N,out.ci);
+      circuit c = nand + out;
+      c.ci += out.ci;
+      return c;
+    } else if constexpr (N == std::bit_width(D)) {
+      // subtract D from the dividend, use sign of result as MUX select
+      auto m = mux(2,N,co);
+      circuit minusD = adder_ks<true,true>(N,m[0].ci+m[1].ci);
+      circuit c = minusD + m[0] + m[1];
+      c.ci += m[1].ci;
+      return c;
+    } else if constexpr (N<=64 && D == (u64(1)<<(N-1))-1) {
+      // D = 2^(N-1)-1
+      // final = (X[N-2:0] + X[N-1]) mod 2^(N-1)-1
+      // Y = X[N-2:0] + X[N-1]
+      // if Y[N-1]=1 final=1 else final=Y[N-2:0] mod 2^(N-1)-1
+      static_assert(N>2);
+      circuit out = nor{2}.make(co) * (N-2);
+      circuit rout = oring(2,co); // rightmost bit
+      out = (inv{}.make(out.ci) + out) || rout;
+      circuit buf = buffer(nor{2}.icap()*(N-2),false); // drive Y[N-1]
+      circuit reduc = remainder_divide_by_constant<N-1,D>(rout.ci);
+      circuit sum = adder_ks<true,true>(N-1,std::max(reduc.ci,buf.ci));
+      return sum + (buf | reduc) + out;
+    } else if constexpr (constexpr u64 K = pow2_minus1(D,MAXKM); K!=0 && K+1<N) {
+      // digital rooth method
+      // reduce to K+1 bits with circular CSA
+      circuit reduc = remainder_divide_by_constant<K+1,D>(co);
+      u64 nd = (N+K-1) / K; // number of K-bit digits
+      circuit csa = circular_csa(K,nd,reduc.ci);
+      return csa + reduc; // no buffering (TODO?)
     } else if constexpr (N<=R) {
+      // use a ROM
       constexpr u64 romsize = u64(1) << N;
       std::array<std::bitset<OBITS>,romsize> data;
       for (u64 i=0; i<romsize; i++) {
 	data.at(i) = i % D;
       }
       return pseudo_rom<romsize,OBITS>(data,co);
-    } else if constexpr (enable_DR && K!=0 && (NN<=R || NN+1<N)) {
-      // digital root method
+    }
+
+    // digital root with 2^K+1 mod D = 0
+    // TODO: Diamond et al., MICRO 2014 (use balanced ternary redundant format)
+    constexpr u64 K = pow2_plus1(D,MAXKP);
+    constexpr u64 ND = (K)? (N+K-1)/K : 0; // number of digits
+    static_assert(K==0 || ND!=0);
+    constexpr u64 NS = ND+1; // number of summands
+    constexpr u64 NN = K + std::bit_width(NS); // reduce input to NN bits
+    constexpr std::bitset<OBITS> EXTRA = (ND^(ND&1)) % D; // extra summand
+
+    if constexpr (K!=0 && (NN<=R || NN+1<N)) {
+      // digital root with alternating sign
       circuit reduc = remainder_divide_by_constant<NN,D>(co);
-      constexpr u64 ncols = (PM>0)? K : std::max(K,OBITS);
+      constexpr u64 ncols = std::max(K,OBITS);
       std::vector<u64> count (ncols,0);
-      for (u64 i=0; i<K; i++) {
+      for (u64 i=0; i<K; i++)
 	count.at(i) = (N%K==0 || i<N%K)? ND : ND-1;
-      }
-      if (PM<0) {
-	// one extra summand
-	for (u64 i=0; i<OBITS; i++) count.at(i) += EXTRA[i];
-      }
+      for (u64 i=0; i<OBITS; i++)
+	count.at(i) += EXTRA[i]; // extra summand
       std::vector<f64> loadcap;
       circuit csa = csa_tree(count,reduc.ci,loadcap);
       assert(loadcap.size()>=K);
+      // every other digit is complemented
       circuit bufs;
-      if (PM>0) {
-	for (u64 i=0; i<N; i++)
-	  bufs = bufs || buffer(loadcap[i%K],false);
-      } else {
-	// every other digit is complemented
-	for (u64 i=0; i<N; i++)
-	  bufs = bufs || buffer(loadcap[i%K],(i/K)&1);
-      }
+      for (u64 i=0; i<N; i++)
+	bufs = bufs || buffer(loadcap[i%K],(i/K)&1);
       return bufs + csa + reduc;
     } else {
-      // odd divisor, default method (use multiplications)
+      // odd divisor, general method (inefficient)
       static_assert(D>=3);
       // L = ceil(log2(D-1))
       // x mod D = {[(ceil(2^(N+L)/D) * x) mod 2^(N+L)] * D} div 2^(N+L)
@@ -2375,7 +2450,7 @@ namespace hcm {
   inline constexpr circuit INC = adder_ks<true,true>(WIDTH,OUTCAP);
 
   template<u64 WIDTH>
-  inline constexpr circuit SUB = adder_ks<false,true>(WIDTH,OUTCAP);
+  inline constexpr circuit SUB = subtract(WIDTH,OUTCAP);
 
   template<u64 WIDTH, u64 N> requires (N>=2)
   inline constexpr circuit ADDN = []() {
