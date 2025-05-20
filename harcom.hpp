@@ -3420,6 +3420,7 @@ namespace hcm {
       assign(std::forward<U>(other));
     }
 
+    void fo1() = delete; // register value is persistent
   };
 
 
@@ -4772,35 +4773,53 @@ namespace hcm {
 
 
   // encode(x) takes a one-hot value and returns the index of the hot bit
-  
-  auto encode(valtype auto x)
+  // if the input is not a one-hot value, the result is meaningless 
+
+  template<u64 N>
+  auto encode(val<N> x)
   {
-    static_assert(x.size!=0);
-    constexpr u64 W = std::bit_width(x.size-1);
+    static_assert(N!=0);
+    constexpr u64 W = std::bit_width(N-1);
     auto xbits = x.fo1().make_array(val<1>{});
-    arr<val<W>,x.size> a = [&](int i){return i & xbits[i].replicate(hard<W>{}).concat();};
+    arr<val<W>,N> a = [&](int i){return i & xbits[i].replicate(hard<W>{}).concat();};
     return a.fo1().fold_or();
   }
 
-  // fold(a,binop) takes an array a, a 2-input function op doing a binary associative operation
-  // and reduces the array to a single value
-  
-  auto fold(arrtype auto a, auto op)
+  // fold(x,op) takes an array x, a 2-input function op doing a binary associative operation
+  // and reduces the array to a single value 
+
+  template<arith T, u64 W, u64 N>
+  val<W,T> fold(arr<val<W,T>,N> x, auto op)
   {
-    static_assert(a.size!=0);
-    if constexpr (a.size == 1) {
-      return a[0].fo1();
+    static_assert(N!=0);
+    if constexpr (N == 1) {
+      return x[0].fo1();
     }
-    using T = decltype(a)::type;
-    constexpr u64 N = (a.size+1)/2;
-    arr<T,N> aa = [&](u64 i){
-      if (2*i+1 < a.size) {
-	return op(a[2*i].fo1(),a[2*i+1].fo1());
+    arr<val<W,T>,(N+1)/2> y = [&] (u64 i) -> val<W,T> {
+      if (2*i+1 < N) {
+	return op(x[2*i].fo1(),x[2*i+1].fo1());
       } else {
-	return a[2*i].fo1();
+	return x[2*i].fo1();
       }
     };
-    return fold(aa.fo1(),op);
+    return fold(y.fo1(),op);
+  }
+
+  template<arith T, u64 W, u64 N>
+  val<W,T> fold(arr<reg<W,T>,N> x, auto op)
+  {
+    static_assert(N!=0);
+    if constexpr (N == 1) {
+      return x[0];
+    }
+    arr<val<W,T>,(N+1)/2> y = [&] (u64 i) -> val<W,T> {
+      if (2*i+1 < N) {
+	return op(x[2*i],x[2*i+1]);
+      } else {
+	return x[2*i];
+      }
+    };
+    return fold(y.fo1(),op);
   }
   
 }
