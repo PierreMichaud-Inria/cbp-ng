@@ -1451,8 +1451,8 @@ namespace hcm {
     u64 cols = m+n-1; // number of CSA columns
     std::vector<u64> count (cols,n); // number of bits per CSA column
     for (u64 i=1; i<n; i++) {
-      count[i-1] = i;
-      count[cols-i] = i;
+      count.at(i-1) = i;
+      count.at(cols-i) = i;
     }
     circuit sum = carry_save_adder(count,co); // sum all partial products
     // compute partial products as ~(~a+~b)
@@ -1491,6 +1491,35 @@ namespace hcm {
       buf = buf || buffer(icap,false);
     }
     return buf + sum;
+  }
+
+
+  constexpr circuit multiply_add(u64 na, u64 nb, u64 nc, f64 co)
+  {
+    // computes A+BxC (unsigned integers)
+    // na,nb,nc = number of bits of A,B,C
+    // see multiplier
+    if (nb>nc) {
+      return multiply_add(na,nc,nb,co);
+    }
+    // B is the multiplier, C the multiplicand
+    assert(nc>=nb && nb>=1 && na>=1);
+    u64 cols = std::max(na,nb+nc-1); // number of CSA columns
+    std::vector<u64> count (cols,nb); // number of bits per CSA column
+    for (u64 i=1; i<nb; i++) {
+      count.at(i-1) = i;
+      count.at(nb+nc-1-i) = i;
+    }
+    for (u64 i=0; i<na; i++) count.at(i)++; // A bits
+    circuit sum = carry_save_adder(count,co); // sum A with all partial products
+    // compute partial products as ~(~a+~b)
+    circuit pp1 = nor{2}.make(sum.ci); // partial product (one bit)
+    // inputs have high fanout if nb or nc is large, buffering needed
+    circuit bufb = buffer(pp1.ci*nc,true); // inverting buffer
+    circuit bufc = buffer(pp1.ci*nb,true); // inverting buffer
+    circuit muladd = (bufb * nb || bufc * nc) + pp1 * (nb*nc) + sum;
+    muladd.ci = std::max(muladd.ci,sum.ci);
+    return muladd;
   }
 
 
@@ -2509,6 +2538,9 @@ namespace hcm {
   template<u64 N, u64 M>
   inline constexpr circuit IMUL = multiplier(N,M,OUTCAP); // N-bit x M-bit
 
+  template<u64 NA, u64 NB, u64 NC>
+  inline constexpr circuit IMAD = multiply_add(NA,NB,NC,OUTCAP); // A+BxC; NX=#bits of X
+
   template<u64 HARDN, u64 M>
   inline constexpr circuit HIMUL = [] () {
     std::bitset<std::bit_width(HARDN)> N {HARDN};
@@ -3279,6 +3311,9 @@ namespace hcm {
 
     template<valtype T>
     friend valt<T> operator~ (T&&);
+
+    template<valtype TA, valtype TB, valtype TC> requires (ival<TA> && ival<TB> && ival<TC>)
+    friend auto a_plus_bc(TA&&,TB&&,TC&&);
 
     template<valtype T1, valtype T2, valtype... T>
     friend auto concat(T1&&, T2&&, T&&...);
@@ -4476,7 +4511,9 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
-    using rtype = val<valt<T1>::size+valt<T2>::size,decltype(v1*v2)>;
+    constexpr u64 rbits = valt<T1>::size + valt<T2>::size; // result bits
+    static_assert(rbits<=val<64>::size,"multiplication result must not exceed 64 bits");
+    using rtype = val<rbits,decltype(v1*v2)>;
     return rtype{v1*v2, std::max(t1,t2)+c.delay()};
   }
 
@@ -4630,6 +4667,22 @@ namespace hcm {
     proxy::update_logic(c);
     auto [v,t] = proxy::get_vt(std::forward<T>(x));
     return {~v, t+c.delay()};
+  }
+
+  // MULTIPLY-ACCUMULATE (A+BxC)
+  template<valtype TA, valtype TB, valtype TC> requires (ival<TA> && ival<TB> && ival<TC>)
+  auto a_plus_bc(TA&& xa, TB&& xb, TC&& xc)
+  {
+    constexpr circuit c = IMAD<valt<TA>::size,valt<TB>::size,valt<TC>::size>;
+    proxy::update_logic(c);
+    auto [va,ta] = proxy::get_vt(std::forward<TA>(xa));
+    auto [vb,tb] = proxy::get_vt(std::forward<TB>(xb));
+    auto [vc,tc] = proxy::get_vt(std::forward<TC>(xc));
+    constexpr u64 bcbits = valt<TB>::size + valt<TC>::size; // bits BxC
+    static_assert(bcbits<=val<64>::size,"multiplication result must not exceed 64 bits");
+    constexpr u64 apbcbits = std::max(valt<TA>::size,bcbits)+1; // bits A+BxC
+    using rtype = val<std::min(val<64>::size,apbcbits),decltype(va+vb*vc)>;
+    return rtype{va+vb*vc, std::max({ta,tb,tc})+c.delay()};
   }
 
   // CONCATENATE BITS
