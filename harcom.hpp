@@ -4769,7 +4769,7 @@ namespace hcm {
 
   // ###########################
   // UTILITIES
-  // below are functions that do not need superuser rights (users could write these functions themselves)
+  // below are functions that do not need superuser rights
 
 
   // encode(x) takes a one-hot value and returns the index of the hot bit
@@ -4792,7 +4792,7 @@ namespace hcm {
   val<W,T> fold(arr<val<W,T>,N> x, auto op)
   {
     static_assert(N!=0);
-    if constexpr (N == 1) {
+    if constexpr (N==1) {
       return x[0].fo1();
     }
     arr<val<W,T>,(N+1)/2> y = [&] (u64 i) -> val<W,T> {
@@ -4806,22 +4806,42 @@ namespace hcm {
   }
 
   template<arith T, u64 W, u64 N>
-  val<W,T> fold(arr<reg<W,T>,N> x, auto op)
+  val<W,T> fold(arr<reg<W,T>,N> &x, auto op)
   {
+    return fold(arr<val<W,T>,N>{x},op);
+  }
+
+  // scan(x,op) takes an array x={x1,x2,...,xn}, a 2-input function op doing a binary associative operation
+  // and returns an array y={y1,y2,...,yn} with y1=x1, y2=op(y1,x2), y3=op(y2,x3),...
+  // AKA inclusive scan AKA parallel prefix
+
+  template<arith T, u64 W, u64 N>
+  arr<val<W,T>,N> scan(arr<val<W,T>,N> x, auto op, u64 step=1)
+  {
+    // Kogge-Stone tree
     static_assert(N!=0);
-    if constexpr (N == 1) {
-      return x[0];
-    }
-    arr<val<W,T>,(N+1)/2> y = [&] (u64 i) -> val<W,T> {
-      if (2*i+1 < N) {
-	return op(x[2*i],x[2*i+1]);
+    x.fanout(hard<2>{});
+    arr<val<W,T>,N> y = [&] (u64 i) -> val<W,T> {
+      if (i >= step) {
+	return op(x[i],x[i-step]);
       } else {
-	return x[2*i];
+	return x[i];
       }
     };
-    return fold(y.fo1(),op);
+    if (step >= std::bit_floor(N-1)) {
+      return y.fo1();
+    } else {
+      return scan(y.fo1(),op,step*2);
+    }
   }
-  
+
+
+  template<arith T, u64 W, u64 N>
+  arr<val<W,T>,N> scan(arr<reg<W,T>,N> &x, auto op)
+  {
+    return scan(arr<val<W,T>,N>{x},op);
+  }
+
 }
 
 #endif // HARCOM_H
