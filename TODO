@@ -1,7 +1,5 @@
 * integer FMA
 
-* general reduction primitive for class arr
-
 * general scan primitive for class arr
 
 * static power

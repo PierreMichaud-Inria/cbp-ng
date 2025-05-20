@@ -3049,7 +3049,7 @@ namespace hcm {
       return val<std::bit_width(N)> {n,t+c.delay()};
     }
 
-    [[nodiscard]] val priority_encode() & requires std::unsigned_integral<T> // lvalue
+    [[nodiscard]] val one_hot() & requires std::unsigned_integral<T> // lvalue
     {
       constexpr circuit c = priority_encoder<N>;
       auto [x,t] = get_vt();
@@ -3058,7 +3058,7 @@ namespace hcm {
       return {y,t+c.delay()};
     }
 
-    [[nodiscard]] val priority_encode() && requires std::unsigned_integral<T> // rvalue
+    [[nodiscard]] val one_hot() && requires std::unsigned_integral<T> // rvalue
     {
       constexpr circuit c = priority_encoder<N>;
       auto [x,t] = std::move(*this).get_vt();
@@ -4714,6 +4714,42 @@ namespace hcm {
   }
 
   // ###########################
+  // UTILITIES
+  // below are functions that do not need superuser rights (users could write these functions themselves)
+
+
+  // encode(x) takes a one-hot value and returns the index of the hot bit
+  
+  auto encode(valtype auto x)
+  {
+    static_assert(x.size!=0);
+    constexpr u64 W = std::bit_width(x.size-1);
+    auto xbits = x.fo1().make_array(val<1>{});
+    arr<val<W>,x.size> a = [&](int i){return i & xbits[i].replicate(hard<W>{}).concat();};
+    return a.fo1().fold_or();
+  }
+
+  // fold(a,binop) takes an array a, a 2-input function op doing a binary associative operation
+  // and reduces the array to a single value
+  
+  auto fold(arrtype auto a, auto op)
+  {
+    static_assert(a.size!=0);
+    if constexpr (a.size == 1) {
+      return a[0].fo1();
+    }
+    using T = decltype(a)::type;
+    constexpr u64 N = (a.size+1)/2;
+    arr<T,N> aa = [&](u64 i){
+      if (2*i+1 < a.size) {
+	return op(a[2*i].fo1(),a[2*i+1].fo1());
+      } else {
+	return a[2*i].fo1();
+      }
+    };
+    return fold(aa.fo1(),op);
+  }
+  
 }
 
 #endif // HARCOM_H

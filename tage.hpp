@@ -172,12 +172,12 @@ struct tage : predictor {
     // find longest match
     auto match = tagcmp.fo1().append(1).concat(); // bimodal is default when no match
     match.fanout(hard<2>{});
-    match1 = match.priority_encode();
+    match1 = match.one_hot();
     match1.fanout(hard<8>{});
     pred1 = (match1 & preds) != hard<0>{};
     pred1.fanout(hard<3>{});
     // find second longest match
-    match2 = (match^match1).priority_encode();
+    match2 = (match^match1).one_hot();
     match2.fanout(hard<2>{});
     pred2 = (match2 & preds) != hard<0>{};
     pred2.fanout(hard<3>{});
@@ -215,9 +215,9 @@ struct tage : predictor {
     // if multiple candidate entries, we select a single one
     auto collamask = candallocmask.reverse();
     collamask.fanout(hard<2>{});
-    auto collamask1 = collamask.priority_encode();
+    auto collamask1 = collamask.one_hot();
     collamask1.fanout(hard<2>{});
-    auto collamask2 = (collamask^collamask1).priority_encode();
+    auto collamask2 = (collamask^collamask1).one_hot();
     auto collamask12 = select(val<2>{rand()}==hard<0>{}, collamask2.fo1(), collamask1);
     auto allocmask = collamask12.fo1().reverse();
     allocmask.fanout(hard<3>{});
