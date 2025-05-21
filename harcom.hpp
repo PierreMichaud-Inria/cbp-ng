@@ -435,17 +435,24 @@ namespace hcm {
     }
   } SRAM_CELL;
 
-  // CGATE = gate capacitance of single-fin NMOS
+  // CGATE = gate capacitance of single-fin nFET
   inline constexpr f64 CGATE_fF = SRAM_CELL.gate_capacitance; // fF
   inline constexpr f64 CGATE_pF = CGATE_fF * 1e-3; // pF
   inline constexpr f64 METALCAP = METALCAP_fF / CGATE_fF; // linear metal capacitance in units of CGATE
   inline constexpr f64 METALCAP_pF = METALCAP * CGATE_pF; // pF
   inline constexpr f64 VDD = 0.75; // supply voltage (V)
-  inline constexpr f64 IDSAT = 60e-6; // NMOS Idsat per fin (A) (IRDS 2021, Ioff ~= 10 pA/fin)
+
+  // Idsat and Ioff values are taken from (FIXME?):
+  // "ASAP5: a predictive PDK for the 5 nm node", Vashishtha & Clark, Microelectronics Journal 126 (2022)
+  inline constexpr f64 IDSAT = 60e-6; // nFET Idsat (A) per fin
+  inline constexpr f64 IDSAT_SRAM = 40e-6; // nFET Idsat (A) per fin in an SRAM cell
+  inline constexpr f64 IOFF = 1e-9; // leakage current per fin (A)
+  inline constexpr f64 IOFF_SRAM = 17e-12; // leakage current per fin (A) in an SRAM cell
+
   // IEFF, REFF ==> Razavieh, Device Research Conference, 2018
-  inline constexpr f64 IEFF = IDSAT/2; // NMOS effective current per fin (A)
-  inline constexpr f64 REFF = VDD/(2*IEFF); // NMOS effective resistance (Ohm)
-  inline constexpr f64 GAMMA = 1; // ratio of PMOS to NMOS capacitance at same conductance
+  inline constexpr f64 IEFF = IDSAT/2; // nFET effective current per fin (A)
+  inline constexpr f64 REFF = VDD/(2*IEFF); // nFET effective resistance (Ohm)
+  inline constexpr f64 GAMMA = 1; // ratio of pFET to nFET capacitance at same conductance
   inline constexpr f64 INVCAP = 1+GAMMA; // input capacitance of single-fin inverter relative to CGATE
   inline constexpr f64 TAU_ps = CGATE_pF * REFF; // intrinsic delay (ps)
 
@@ -2067,13 +2074,13 @@ namespace hcm {
       f64 T0 = RBL * CBL * (CBL+3*SACAP_pF) / (6*(CBL+SACAP_pF)); // ps
       return T0;     
     } ();
-    
+
     static constexpr f64 BLDELAY = []() { // bitline total delay (ps)
       // model cell drive as current source (Amrutur & Horowitz)
       // neglect resistance of sense-amp isolation transistor
       // assume current is approximately Idsat/2 (2 nMOS in series)
       f64 CBL = N * BLCAP_pF; // fF
-      return BLRC + (CBL+SACAP_pF) * BLSWING / (IDSAT/2);
+      return BLRC + (CBL+SACAP_pF) * BLSWING / (IDSAT_SRAM/2);
     } ();
 
     // gates layout in peripheric logic is constrained by the wordline/bitline pitch
@@ -2715,9 +2722,10 @@ namespace hcm {
     global<u64> clock_cycle_ps = 300;
     global<u64> cycle = first_cycle;
     global<u64> storage;
+    global<u64> storage_sram;
     global<f64> energy_fJ;
-    global<u64> transistors_storage;
-    global<u64> transistors_logic[2];
+    global<u64> transistors[2];
+    global<u64> transistors_init;
 
   private:
     global<bool> storage_destroyed = false;
@@ -2729,14 +2737,23 @@ namespace hcm {
 	std::terminate();
       }
       cycle++;
-      transistors_logic[1] = transistors_logic[0];
-      transistors_logic[0] = 0;
+      transistors[1] = transistors[0];
+      transistors[0] = 0;
     }
 
-    void update_storage(u64 nbits, u64 xtors)
+    void update_xtors(u64 xtors, bool init)
+    {
+      if (init) {
+	transistors_init += xtors;
+      } else {
+	transistors[0] += xtors;
+      }
+    }
+
+    void update_storage(u64 nbits, bool is_sram)
     {
       storage += nbits;
-      transistors_storage += xtors;
+      if (is_sram) storage_sram += nbits;
     }
 
     void update_energy(f64 e)
@@ -2746,16 +2763,32 @@ namespace hcm {
 
     void update_logic(const circuit &c)
     {
-      transistors_logic[0] += c.t;
+      update_xtors(c.t,false);
       update_energy(c.e);
     }
 
   public:
-    f64 power_mW()
+
+    u64 total_transistors()
+    {
+      return transistors_init + transistors[cycle!=first_cycle];
+    }
+
+    f64 dynamic_power_mW()
     {
       assert(cycle>first_cycle);
       assert(clock_cycle_ps != 0);
-      return energy_fJ / ((cycle-first_cycle)*clock_cycle_ps);
+      return energy_fJ / ((cycle-first_cycle)*clock_cycle_ps); // mW
+    }
+
+    f64 static_power_mW()
+    {
+      // FIXME: not all transistors are single fin
+      u64 xtors = total_transistors();
+      u64 xtors_sram = storage_sram * SRAM_CELL.transistors;
+      assert(xtors >= xtors_sram);
+      u64 xtors_logic = xtors - xtors_sram;
+      return ((xtors_sram/2) * IOFF_SRAM + (xtors_logic/2) * IOFF) * VDD * 1e3; // mW
     }
 
     void print(std::ostream & os = std::cout)
@@ -2766,17 +2799,13 @@ namespace hcm {
 	os << "clock frequency (GHz): " << 1000./clock_cycle_ps << std::endl;
       }
       storage.print("storage (bits): ",os);
-      transistors_storage.print("transistors (storage): ",os);
+      os << "transistors: " << total_transistors() << std::endl;
       if (cycle == first_cycle) {
-	transistors_logic[0].print("transistors (logic): ",os);
-      } else {
-	transistors_logic[1].print("transistors (logic): ",os);
-      }
-      if (cycle == first_cycle) {
-	energy_fJ.print("energy (fJ): ",os);	
+	energy_fJ.print("dynamic energy (fJ): ",os);	
       } else if (clock_cycle_ps != 0) {
-	os << "power (mW): " << power_mW() << std::endl;
+	os << "dynamic power (mW): " << dynamic_power_mW() << std::endl;
       }
+      os << "static power (mW): " << static_power_mW() << std::endl;
     }
   } panel;
 
@@ -3181,14 +3210,15 @@ namespace hcm {
     {
       static_assert(std::unsigned_integral<base<T1>>);
       static_assert(std::unsigned_integral<base<T2>>);
-      using rtype = val<x1.size+x2.size>;
+      constexpr u64 N = x1.size + x2.size; // output bits
+      static_assert(N<=64,"concatenation exceeds 64 bits");
       if constexpr (x1.size == 0) {
 	auto [v2,t2] = std::forward<T2>(x2).get_vt();
-	return rtype {v2,t2};
+	return val<N>{v2,t2};
       } else {
 	auto [v1,t1] = std::forward<T1>(x1).get_vt();
 	auto [v2,t2] = std::forward<T2>(x2).get_vt();
-	return rtype {(v1 << x2.size) | v2, std::max(t1,t2)};
+	return val<N>{(v1 << x2.size) | v2, std::max(t1,t2)};
       }
     }
 
@@ -3367,7 +3397,8 @@ namespace hcm {
 	std::cerr << "all storage (reg,ram) must have the same lifetime" << std::endl;
 	std::terminate();
       }
-      panel.update_storage(N,stg::xtors);
+      panel.update_storage(N,false);
+      panel.update_xtors(stg::xtors,true);
     }
 
   public:
@@ -3601,6 +3632,7 @@ namespace hcm {
 
     [[nodiscard]] arr&& fo1() & // lvalue
     {
+      static_assert(! regtype<T>,"cannot apply fo1() to registers");
       return std::move(*this);
     }
 
@@ -4021,7 +4053,8 @@ namespace hcm {
 
     ram()
     {
-      panel.update_storage(static_ram::NBITS,static_ram::XTORS);
+      panel.update_storage(static_ram::NBITS,true);
+      panel.update_xtors(static_ram::XTORS,true);
     }
 
     ~ram()
