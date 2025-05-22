@@ -1,5 +1,5 @@
-#include "gshare.hpp"
-#include "tage.hpp"
+#include "predictors/gshare.hpp"
+#include "predictors/tage.hpp"
 
 #ifdef PREDICTOR
 using branch_predictor = PREDICTOR;
