@@ -25,7 +25,7 @@ struct gshare : predictor {
     return val<1>(ctr>>1);
   }
 
-  void update(val<64> pc, val<1> dir)
+  void update([[maybe_unused]] val<64> pc, val<1> dir)
   {
     pht.write(index, update_2bc(ctr,dir));
     ghist = concat(val<LOGN-1>(ghist),dir);

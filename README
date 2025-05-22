@@ -1,2 +1,8 @@
 chmod u+x compile
+
+simulate the default TAGE predictor:
 compile cbp
+cbp
+
+try another predictor:
+compile cbp -DPREDICTOR="gshare<18>"

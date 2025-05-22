@@ -442,8 +442,9 @@ namespace hcm {
   inline constexpr f64 METALCAP_pF = METALCAP * CGATE_pF; // pF
   inline constexpr f64 VDD = 0.75; // supply voltage (V)
 
-  // Idsat and Ioff values are taken from (FIXME?):
+  // Idsat and Ioff values are taken from (FIXME?)
   // "ASAP5: a predictive PDK for the 5 nm node", Vashishtha & Clark, Microelectronics Journal 126 (2022)
+  // FIXME: these numbers are for 0.7 V and 25 C
   inline constexpr f64 IDSAT = 60e-6; // nFET Idsat (A) per fin
   inline constexpr f64 IDSAT_SRAM = 40e-6; // nFET Idsat (A) per fin in an SRAM cell
   inline constexpr f64 IOFF = 1e-9; // leakage current per fin (A)
