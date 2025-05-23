@@ -3557,17 +3557,19 @@ namespace hcm {
       }
     }
 
-    template<std::convertible_to<T> U>
-    arr(std::array<U,N> &b)
+    template<std::convertible_to<T> U, u64 M>
+    arr(std::array<U,M> &b)
     {
+      static_assert(M==N,"array size mismatch");
       for (u64 i=0; i<N; i++) {
 	elem[i] = b[i];
       }
     }
 
-    template<std::convertible_to<T> U>
-    arr(U (&b)[N])
+    template<std::convertible_to<T> U, u64 M>
+    arr(U (&b)[M])
     {
+      static_assert(M==N,"array size mismatch");
       for (u64 i=0; i<N; i++) {
 	elem[i] = b[i];
       }
@@ -3735,7 +3737,7 @@ namespace hcm {
       auto a = pack_bits<T::size>(data);
       auto aa = unpack_bits<W>(a);
       static_assert(aa.size()>=M);
-      arr<val<W>,M> out {aa};
+      arr<val<W>,M> out = [&](u64 i){return aa[i];};
       out.set_time(t);
       return out;
     }
@@ -3752,7 +3754,7 @@ namespace hcm {
       auto a = pack_bits<T::size>(data);
       auto aa = unpack_bits<W>(a);
       static_assert(aa.size()>=M);
-      arr<val<W>,M> out {aa};
+      arr<val<W>,M> out = [&](u64 i){return aa[i];};
       out.set_time(t);
       return out;
     }
@@ -3779,7 +3781,7 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out {aa};
+      arr<valt<T>,N> out = [&](u64 i){return aa[i];};
       out.set_time(t);
       return out;
     }
@@ -3806,7 +3808,7 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out {aa};
+      arr<valt<T>,N> out = [&](u64 i){return aa[i];};
       out.set_time(t);
       return out;
     }
@@ -3842,7 +3844,7 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out {aa};
+      arr<valt<T>,N> out = [&](u64 i){return aa[i];};
       out.set_time(t);
       return out;
     }
@@ -3878,7 +3880,7 @@ namespace hcm {
       }
       auto aa = unpack_bits<T::size>(a);
       static_assert(aa.size()>=N);
-      arr<valt<T>,N> out {aa};
+      arr<valt<T>,N> out = [&](u64 i){return aa[i];};
       out.set_time(t);
       return out;
     }
