@@ -2789,6 +2789,7 @@ namespace hcm {
       u64 xtors_sram = storage_sram * SRAM_CELL.transistors;
       assert(xtors >= xtors_sram);
       u64 xtors_logic = xtors - xtors_sram;
+      // FIXME: this is a very rough model (e.g., ignores stacking and temperature)
       return ((xtors_sram/2) * IOFF_SRAM + (xtors_logic/2) * IOFF) * VDD * 1e3; // mW
     }
 
@@ -3001,7 +3002,7 @@ namespace hcm {
     template<valtype U>
     val(U &&x) : val{std::forward<U>(x).get(),x.time()} {} // list initialization
 
-    template<arith auto FO>
+    template<std::integral auto FO>
     void fanout(hard<FO>) & // lvalue
     {
 #ifndef FREE_FANOUT
@@ -3129,7 +3130,7 @@ namespace hcm {
       return {y,t+c.delay()};
     }
 
-    template<arith auto M>
+    template<std::integral auto M>
     [[nodiscard]] arr<val,M> replicate(hard<M>) & // lvalue
     {
       // only the user knows the actual fanout (>=M) and can set it
@@ -3139,7 +3140,7 @@ namespace hcm {
       return a;
     }
 
-    template<arith auto M>
+    template<std::integral auto M>
     [[nodiscard]] arr<val,M> replicate(hard<M>) && // rvalue
     {
       // the user cannot set the fanout (rvalue), but the fanout is known
@@ -3477,7 +3478,7 @@ namespace hcm {
     template<arrtype U>
     void copy_from(U &&other)
     {
-      static_assert(other.size == N);
+      static_assert(other.size == N,"destination and source array must have the same size");
       if constexpr (std::is_rvalue_reference_v<decltype(other)>) {
 	for (u64 i=0; i<N; i++) elem[i] = std::move(other.elem[i]);
       } else {
@@ -3624,7 +3625,7 @@ namespace hcm {
       }
     }
 
-    template<arith auto FO>
+    template<std::integral auto FO>
     void fanout(hard<FO>) & // lvalue
     {
       static_assert(FO>=2);
@@ -3649,7 +3650,7 @@ namespace hcm {
       for (u64 i=0; i<N; i++) elem[i].printb(before+std::to_string(i)+": ",after,t,os);
     }
 
-    auto concat() & requires std::unsigned_integral<atype> // lvalue
+    [[nodiscard]] auto concat() & requires std::unsigned_integral<atype> // lvalue
     {
       // element 0 is at rightmost position
       static_assert(N!=0);
@@ -3660,7 +3661,7 @@ namespace hcm {
       return val<N*T::size> {y,time()};
     }
 
-    auto concat() && requires std::unsigned_integral<atype> // rvalue
+    [[nodiscard]] auto concat() && requires std::unsigned_integral<atype> // rvalue
     {
       // element 0 is at rightmost position
       static_assert(N!=0);
@@ -3674,24 +3675,46 @@ namespace hcm {
     template<std::convertible_to<valt<T>> U>
     [[nodiscard]] auto append(U &&x) & // lvalue
     {
-      arr<valt<T>,N+1> b;
+      arr<valt<T>,N+1> out;
       for (u64 i=0; i<N; i++) {
-	b[i] = elem[i];
+	out[i] = elem[i];
       }
-      b[N] = std::forward<U>(x);
-      return b;
+      out[N] = std::forward<U>(x);
+      return out;
     }
 
     template<std::convertible_to<valt<T>> U>
     [[nodiscard]] auto append(U &&x) && // rvalue
     {
-      arr<valt<T>,N+1> b;
+      arr<valt<T>,N+1> out;
       for (u64 i=0; i<N; i++) {
-	b[i] = std::move(elem[i]);
+	out[i] = std::move(elem[i]);
       }
-      b[N] = std::forward<U>(x);
-      return b;
+      out[N] = std::forward<U>(x);
+      return out;
     }
+
+    template<std::integral auto L>
+    [[nodiscard]] auto truncate(hard<L>) & // lvalue
+    {
+      static_assert(L<N,"truncate means making the array shorter");
+      arr<valt<T>,L> out;
+      for (u64 i=0; i<L; i++) {
+	out[i] = elem[i];
+      }
+      return out;
+    }
+
+    template<std::integral auto L>
+    [[nodiscard]] auto truncate(hard<L>) && // rvalue
+    {
+      static_assert(L<N,"truncate means making the array shorter");
+      arr<valt<T>,L> out;
+      for (u64 i=0; i<L; i++) {
+	out[i] = std::move(elem[i]);
+      }
+      return out;
+    }    
 
     template<u64 W>
     [[nodiscard]] auto make_array(val<W>&&) & // lvalue
@@ -3853,7 +3876,7 @@ namespace hcm {
       return out;
     }
 
-    valt<T> fold_xor() & // lvalue
+    [[nodiscard]] valt<T> fold_xor() & // lvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3871,7 +3894,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_xor() && // rvalue
+    [[nodiscard]] valt<T> fold_xor() && // rvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3889,7 +3912,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_or() & // lvalue
+    [[nodiscard]] valt<T> fold_or() & // lvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3907,7 +3930,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_or() && // rvalue
+    [[nodiscard]] valt<T> fold_or() && // rvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3925,7 +3948,7 @@ namespace hcm {
       }
     }    
 
-    valt<T> fold_and() & // lvalue
+    [[nodiscard]] valt<T> fold_and() & // lvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3943,7 +3966,7 @@ namespace hcm {
       }
     }
 
-    valt<T> fold_and() && // rvalue
+    [[nodiscard]] valt<T> fold_and() && // rvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3961,7 +3984,7 @@ namespace hcm {
       }
     }
 
-    auto fold_add() & // lvalue
+    [[nodiscard]] auto fold_add() & // lvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -3980,7 +4003,7 @@ namespace hcm {
       }
     }
 
-    auto fold_add() && // rvalue
+    [[nodiscard]] auto fold_add() && // rvalue
     {
       static_assert(ival<T>);
       if constexpr (N>=2) {
@@ -4086,7 +4109,7 @@ namespace hcm {
     }
 
     template<ival U>
-    T read(U && address)
+    [[nodiscard]] T read(U && address)
     {
       if (panel.cycle <= last_read_cycle) {
 	std::cerr << "single RAM read per cycle" << std::endl;
@@ -4191,7 +4214,7 @@ namespace hcm {
     constexpr rom(unaryfunc<u64,T> auto f) : content(f), hw(ROM(content.data)) {}
 
     template<ival U>
-    T operator() (U && address) const
+    [[nodiscard]] T operator() (U && address) const
     {
       proxy::update_logic(hw);
       auto [i,t] = proxy::get_vt(std::forward<U>(address));
@@ -4706,7 +4729,7 @@ namespace hcm {
 
   // MULTIPLY-ACCUMULATE (A+BxC)
   template<valtype TA, valtype TB, valtype TC> requires (ival<TA> && ival<TB> && ival<TC>)
-  auto a_plus_bc(TA&& xa, TB&& xb, TC&& xc)
+  [[nodiscard]] auto a_plus_bc(TA&& xa, TB&& xb, TC&& xc)
   {
     constexpr circuit c = IMAD<valt<TA>::size,valt<TB>::size,valt<TC>::size>;
     proxy::update_logic(c);
@@ -4722,7 +4745,7 @@ namespace hcm {
 
   // CONCATENATE BITS
   template<valtype T1, valtype T2, valtype... T>
-  auto concat(T1&& x1, T2&& x2, T&&... x)
+  [[nodiscard]] auto concat(T1&& x1, T2&& x2, T&&... x)
   {
     // no transistors (wires not modeled, TODO?)
     if constexpr (sizeof...(x)==0) {
@@ -4734,7 +4757,7 @@ namespace hcm {
 
   // SELECT BETWEEN TWO VALUES
   template<valtype T, valtype T1, valtype T2>
-  valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
+  [[nodiscard]] valt<T1,T2> select(T &&cond, T1 &&x1, T2 &&x2)
   {
     // this is NOT conditional execution: both sides are evaluated
     static_assert(valt<T>::size == 1,"the condition of a select is a single bit");
@@ -4776,7 +4799,7 @@ namespace hcm {
   }
 
   template<valtype T, action A>
-  auto execute_if(T &&mask, const A &f)
+  [[nodiscard]] auto execute_if(T &&mask, const A &f)
   {
     static_assert(valtype<return_type<A>>);
     static_assert(std::unsigned_integral<base<T>>);
@@ -4801,6 +4824,7 @@ namespace hcm {
     return result;
   }
 
+
   // ###########################
   // UTILITIES
   // below are functions that do not need superuser rights
@@ -4810,7 +4834,7 @@ namespace hcm {
   // if the input is not a one-hot value, the result is meaningless 
 
   template<u64 N>
-  auto encode(val<N> x)
+  [[nodiscard]] auto encode(val<N> x)
   {
     static_assert(N!=0);
     constexpr u64 W = std::bit_width(N-1);
@@ -4823,7 +4847,7 @@ namespace hcm {
   // and reduces the array to a single value 
 
   template<arith T, u64 W, u64 N>
-  val<W,T> fold(arr<val<W,T>,N> x, auto op)
+  [[nodiscard]] val<W,T> fold(arr<val<W,T>,N> x, auto op)
   {
     static_assert(N!=0);
     if constexpr (N==1) {
@@ -4840,7 +4864,7 @@ namespace hcm {
   }
 
   template<arith T, u64 W, u64 N>
-  val<W,T> fold(arr<reg<W,T>,N> &x, auto op)
+  [[nodiscard]] val<W,T> fold(arr<reg<W,T>,N> &x, auto op)
   {
     return fold(arr<val<W,T>,N>{x},op);
   }
@@ -4850,7 +4874,7 @@ namespace hcm {
   // AKA inclusive scan AKA parallel prefix
 
   template<arith T, u64 W, u64 N>
-  arr<val<W,T>,N> scan(arr<val<W,T>,N> x, auto op, u64 step=1)
+  [[nodiscard]] arr<val<W,T>,N> scan(arr<val<W,T>,N> x, auto op, u64 step=1)
   {
     // Kogge-Stone tree
     static_assert(N!=0);
@@ -4869,9 +4893,8 @@ namespace hcm {
     }
   }
 
-
   template<arith T, u64 W, u64 N>
-  arr<val<W,T>,N> scan(arr<reg<W,T>,N> &x, auto op)
+  [[nodiscard]] arr<val<W,T>,N> scan(arr<reg<W,T>,N> &x, auto op)
   {
     return scan(arr<val<W,T>,N>{x},op);
   }

@@ -4,7 +4,7 @@
 using namespace hcm;
 
 
-template<u64 MAXL, u64 NUMG>
+template<u64 MAXL>
 struct path_history {
   static constexpr u64 N = MAXL / 64;
   static constexpr u64 R = MAXL % 64;
@@ -50,13 +50,13 @@ struct path_history {
     constexpr u64 mask = (u64(1)<<pos)-1;
     if constexpr (R==0) {
       auto a = h.make_array(val<STEP>{});
-      return arr<val<STEP>,chunks> {[&](int i) {
-	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask: a[i].fo1();
+      return arr<val<STEP>,chunks> {[&](u64 i) {
+	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask : a[i].fo1();
       }};
     } else {
       auto a = h.append(hr).make_array(val<STEP>{});
-      return arr<val<STEP>,chunks> {[&](int i) {
-	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask: a[i].fo1();
+      return arr<val<STEP>,chunks> {[&](u64 i) {
+	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask : a[i].fo1();
       }};
     }
   }
@@ -90,7 +90,7 @@ struct tage : predictor {
   ram<val<CTR>,NG> gctr[NUMG]; // global tables counters
   ram<val<1>,NG> ubit[NUMG]; // "useful" bits
 
-  path_history<GHIST,NUMG> ph;
+  path_history<GHIST> ph;
 
   reg<LOGB> bi; // bimodal table index 
   arr<reg<LOGG>,NUMG> gi; // global tables indexes
