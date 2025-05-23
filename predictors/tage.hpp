@@ -12,8 +12,6 @@ struct path_history {
   arr<reg<64>,N> h;
   reg<R> hr;
 
-  path_history() {}
-
   template<u64 FO>
   void fanout(hard<FO>)
   {

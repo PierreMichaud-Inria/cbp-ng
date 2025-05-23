@@ -86,7 +86,7 @@ namespace hcm {
   concept arithlike = arith<T> || (hardval<T> && arith<typename T::type>);
 
   template<typename T, typename X, typename Y>
-  concept unaryfunc = requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
+  concept unaryfunc = (std::same_as<X,void> && requires (T f) {{f()} -> std::convertible_to<Y>;}) || requires (T f, X i) {{f(i)} -> std::convertible_to<Y>;};
 
   template<typename T>
   concept action = requires (T f) {f();} || requires (T f, u64 i) {f(i);};
@@ -3547,6 +3547,13 @@ namespace hcm {
     {
       for (u64 i=0; i<N; i++) {
 	elem[i] = f(i);
+      }
+    }
+
+    arr(unaryfunc<void,T> auto f)
+    {
+      for (u64 i=0; i<N; i++) {
+	elem[i] = f();
       }
     }
 
