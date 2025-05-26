@@ -1,77 +1,12 @@
 #include <cstdlib>
 #include "../harcom.hpp"
+#include "common.hpp"
 
 using namespace hcm;
 
 
-template<u64 MAXL>
-struct path_history {
-  static constexpr u64 N = MAXL / 64;
-  static constexpr u64 R = MAXL % 64;
-
-  arr<reg<64>,N> h;
-  reg<R> hr;
-
-  template<u64 FO>
-  void fanout(hard<FO>)
-  {
-    h.fanout(hard<FO>{});
-    hr.fanout(hard<FO>{});
-  }
-
-  void update(valtype auto in)
-  {
-    if constexpr (N==0) {
-      hr = (hr<<1) ^ in.fo1();
-    } else {
-      if constexpr (R==0) {
-	auto a = h.shift_left(val<1>{0});
-	h[0] = a[0].fo1() ^ in.fo1();
-	for (u64 i=1; i<N; i++) h[i] = a[i].fo1();
-      } else {
-	auto a = h.append(hr).shift_left(val<1>{0});
-	static_assert(a.size==N+1);
-	h[0] = a[0].fo1() ^ in.fo1();
-	for (u64 i=1; i<N; i++) h[i] = a[i].fo1();
-	hr = a[N].fo1();
-      }
-    }
-  }
-
-  template<u64 STEP, u64 LENGTH>
-  auto make_array()
-  {
-    static_assert(LENGTH<=MAXL);
-    static_assert(STEP!=0 && STEP<=64);
-    constexpr u64 chunks = (LENGTH+STEP-1) / STEP;
-    constexpr u64 pos = LENGTH % STEP;
-    constexpr u64 mask = (u64(1)<<pos)-1;
-    if constexpr (R==0) {
-      auto a = h.make_array(val<STEP>{});
-      return arr<val<STEP>,chunks> {[&](u64 i) {
-	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask : a[i].fo1();
-      }};
-    } else {
-      auto a = h.append(hr).make_array(val<STEP>{});
-      return arr<val<STEP>,chunks> {[&](u64 i) {
-	return (mask!=0 && i==chunks-1)? a[i].fo1() & mask : a[i].fo1();
-      }};
-    }
-  }
-};
-
-
-template<u64 N>
-[[nodiscard]] val<N> update_ctr(val<N> ctr, val<1> incr)
-{
-  ctr.fanout(hard<6>{});
-  val<N> incsat = select(ctr==hard<ctr.maxval>{},ctr,val<N>{ctr+1});
-  val<N> decsat = select(ctr==hard<ctr.minval>{},ctr,val<N>{ctr-1});
-  return select(incr.fo1(),incsat.fo1(),decsat.fo1());
-}
-
-
 #define USE_META
+
 
 template<u64 NUMG, u64 LOGG, u64 LOGB, u64 TAGW, u64 GHIST>
 struct tage : predictor {
@@ -88,8 +23,8 @@ struct tage : predictor {
   ram<val<CTR>,NG> gctr[NUMG]; // global tables counters
   ram<val<1>,NG> ubit[NUMG]; // "useful" bits
 
-  path_history<GHIST> ph;
-
+  geometric_folds<NUMG,MINHIST,GHIST,LOGG,TAGW> gfolds;
+  
   reg<LOGB> bi; // bimodal table index 
   arr<reg<LOGG>,NUMG> gi; // global tables indexes
   arr<reg<TAGW>,NUMG> gt; // computed tags
@@ -136,19 +71,15 @@ struct tage : predictor {
 
   val<1> predict(val<64> pc)
   {
-    ph.fanout(hard<1+NUMG*2>{});
     pc.fanout(hard<1+NUMG*2>{});
     // compute indexes
     bi = pc;
     bi.fanout(hard<2>{});
-    static_loop<NUMG> ([&]<int I>() {
-	gi[I] = ph.template make_array<LOGG,HLEN[I]>().append(pc).fold_xor();
-    });
-    gi.fanout(hard<6>{});
-    // compute tags
-    static_loop<NUMG> ([&]<int I>() {
-	gt[I] = ph.template make_array<TAGW,HLEN[I]>().append(val<TAGW>(pc).reverse()).fold_xor();
-    });
+    for (u64 i=0; i<NUMG; i++) {
+      gi[i] = pc ^ gfolds.template get<0>(i);
+      gt[i] = val<TAGW>(pc).reverse() ^ gfolds.template get<1>(i);
+    }
+    gi.fanout(hard<6>{});  
     gt.fanout(hard<2>{});
     // read tables
     arr<val<TAGW>,NUMG> tags = [&](int i){return gtag[i].read(gi[i]);};
@@ -240,8 +171,9 @@ struct tage : predictor {
     execute_if(umask | allocmask | uclearmask.fo1(), [&](u64 i) {
       ubit[i].write(gi[i],select(umask_split[i].fo1(),goodpred,val<1>{0}));
     });
-    // update path history
-    ph.update(concat(val<5>{pc.fo1()},dir));
+    // update global history and folds
+    auto branchbits = concat(val<5>{pc.fo1()},dir);
+    gfolds.update(branchbits);
   }
-  
+
 };

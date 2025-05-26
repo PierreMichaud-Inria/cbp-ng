@@ -3372,7 +3372,8 @@ namespace hcm {
     template<valtype T>
     split(T && x)
     {
-      static_assert(x.size == L+R);
+      static_assert(x.size == L+R,"incorrect use of split<L,R>");
+      static_assert(std::unsigned_integral<base<T>>,"can only split an unsigned value");
       auto [data,t] = std::forward<T>(x).get_vt();
       right = {data,t};
       if constexpr (R<64) {
@@ -3770,7 +3771,7 @@ namespace hcm {
       auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
-	for (u64 i=a.size(); i!=0; i--) a[i] = a[i]-1;
+	for (u64 i=a.size()-1; i!=0; i--) a[i] = a[i-1];
 	a[0] = std::forward<U>(x).get();
       } else {
 	static_assert(U::size<64);
@@ -3797,7 +3798,7 @@ namespace hcm {
       auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
-	for (u64 i=a.size(); i!=0; i--) a[i] = a[i]-1;
+	for (u64 i=a.size()-1; i!=0; i--) a[i] = a[i-1];
 	a[0] = std::forward<U>(x).get();
       } else {
 	static_assert(U::size<64);
@@ -3824,7 +3825,7 @@ namespace hcm {
       auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
-	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i]+1;
+	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i+1];
 	a[a.size()-1] = 0;
       } else {
 	static_assert(U::size<64);
@@ -3860,7 +3861,7 @@ namespace hcm {
       auto t = time(); // FIXME?
       auto a = pack_bits<T::size>(data);
       if constexpr (U::size == 64) {
-	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i]+1;
+	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i+1];
 	a[a.size()-1] = 0;
       } else {
 	static_assert(U::size<64);

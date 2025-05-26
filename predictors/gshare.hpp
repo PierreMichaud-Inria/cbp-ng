@@ -1,4 +1,5 @@
 #include "../harcom.hpp"
+#include "common.hpp"
 
 using namespace hcm;
 
@@ -11,13 +12,6 @@ struct gshare : predictor {
   reg<LOGN> index;
   reg<2> ctr;
   
-  val<2> update_2bc(val<2> ctr, val<1> incr)
-  {
-    val<2> incsat = select(ctr==3,ctr,val<2>{ctr+1});
-    val<2> decsat = select(ctr==0,ctr,val<2>{ctr-1});
-    return select(incr,incsat,decsat);
-  }
-
   val<1> predict(val<64> pc)
   {
     index = val<LOGN>(pc) ^ ghist;
@@ -27,7 +21,7 @@ struct gshare : predictor {
 
   void update([[maybe_unused]] val<64> pc, val<1> dir)
   {
-    pht.write(index, update_2bc(ctr,dir));
+    pht.write(index, update_ctr(ctr,dir));
     ghist = concat(val<LOGN-1>(ghist),dir);
   }
 };
