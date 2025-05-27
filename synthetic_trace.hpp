@@ -1,3 +1,6 @@
+#ifndef SYNTHETIC_TRACE_H
+#define SYNTHETIC_TRACE_H
+
 #include <cstdint>
 #include <cassert>
 #include <cmath>
@@ -19,8 +22,8 @@ using i64 = std::int64_t;
 using f64 = double;
 
 
-template<u64 FOOTPRINT=1000, u64 PATTERNS=8, u64 PATTERN_LENGTH=101, u64 NESTING=5>
 struct synthetic_trace {
+  
   static constexpr u64 I = 4; // bytes per instruction
   static constexpr u64 block_avg = 5; // instructions per branch
   static constexpr f64 fwd_fraction = 0.9;
@@ -30,9 +33,11 @@ struct synthetic_trace {
   static constexpr u64 region = 64; // region size (instructions) 
   static constexpr f64 diverge_fraction = 0.3;
   static_assert(block_avg >= 3);
-  static_assert(NESTING * (block_avg-2) >= 2);
   static_assert(loop_count_mode <= loop_count_median);
 
+  const u64 footprint;
+  const u64 nesting;
+  
   static constexpr u64 NR = 3;
   std::mt19937_64 rng[NR];
   using bernoulli = std::bernoulli_distribution;
@@ -44,7 +49,7 @@ struct synthetic_trace {
   u64 bi = 0; // current block index
   u64 stats_branch = 0;
   u64 stats_loop = 0;
-  u64 edge[FOOTPRINT] = {};
+  std::vector<u64> edge;
 
   struct block {
     u64 branch_addr = 0;
@@ -76,14 +81,18 @@ struct synthetic_trace {
   std::vector<block> blocks;
 
   struct pattern {
-    std::bitset<PATTERN_LENGTH> p;
+    std::vector<bool> p;
     u64 hand = 0;
+
+    pattern(u64 pattern_length)
+    {
+      p.resize(pattern_length);
+    }
 
     void init(auto &rng)
     {
       bernoulli pattern_dist {diverge_fraction};
-      for (u64 i=0; i<p.size(); i++)
-	p[i] = pattern_dist(rng);
+      for (auto &&e : p) e = pattern_dist(rng);
     }
 
     bool next()
@@ -94,22 +103,23 @@ struct synthetic_trace {
     }
   };
 
-  pattern patt[PATTERNS];
+  std::vector<pattern> patt;
 
-  synthetic_trace(u64 seed=0, f64 noise=0.001) : noise_dist{noise}
+  synthetic_trace(u64 footprint=1000, u64 patterns=8, u64 pattern_length=101, u64 nesting=5, u64 seed=0, f64 noise=0.001) : footprint(footprint), nesting(nesting), noise_dist{noise}, edge(footprint), patt(patterns,pattern_length)
   {
+    assert(nesting * (block_avg-2) >= 2);
     u64 seeds[NR];
     std::seed_seq ss {seed};
     ss.generate(seeds,seeds+NR);
     for (u64 i=0; i<NR; i++) rng[i].seed(seeds[i]);
     zone_address = rng[0]();
     generate_edges(rng[0],rng[1]);
-    for (u64 i=0; i<FOOTPRINT-1; i++) {
+    for (u64 i=0; i<footprint-1; i++) {
       if (edge[i]==0) continue;
       blocks.emplace_back(*this,branch_address(i),branch_address(edge[i]));
     }
     // end the zone with a backward jump to the start
-    blocks.emplace_back(*this,branch_address(FOOTPRINT-1),zone_address);
+    blocks.emplace_back(*this,branch_address(footprint-1),zone_address);
     for (u64 i=0; i<blocks.size(); i++) {
       blocks[i].target_block = find_block(blocks[i].jump_target_addr);
     }
@@ -120,18 +130,18 @@ struct synthetic_trace {
 
   void generate_edges(auto &rng1, auto &rng2)
   {
-    constexpr f64 step_proba = 2 * (1+1./NESTING) / block_avg;
-    static_assert(step_proba <= 1);
+    f64 step_proba = 2 * (1+1./nesting) / block_avg;
+    assert(step_proba <= 1);
     bernoulli is_step {step_proba};
     bernoulli step_up;
     // set backward edges
     u64 level = 0;
-    std::array<u64,NESTING> edge_end = {};    
-    for (u64 i=1; i<FOOTPRINT; i++) {
+    std::vector<u64> edge_end (nesting,0);
+    for (u64 i=1; i<footprint; i++) {
       if (! is_step(rng1)) continue;
       u64 prev_level = level;
       if (step_up(rng2)) {
-	if (level < NESTING) level++;
+	if (level < nesting) level++;
       } else {
 	if (level != 0) level--;
       }
@@ -140,7 +150,7 @@ struct synthetic_trace {
     }
     // revert some edges in proportion of forward jumps
     bernoulli is_fwd {fwd_fraction};
-    for (u64 i=0; i<FOOTPRINT; i++) {
+    for (u64 i=0; i<footprint; i++) {
       if (edge[i]!=0 && is_fwd(rng1)) {
 	// revert the edge
 	assert(edge[i]<i);
@@ -204,3 +214,5 @@ struct synthetic_trace {
     return std::tuple{b.branch_addr*I, branch_taken, next_addr*I}; // branch trace
   }
 };
+
+#endif // SYNTHETIC_TRACE_H

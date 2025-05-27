@@ -4,8 +4,11 @@
 
 using namespace hcm;
 
+// this is a basic TAGE, not optimized
+
 
 #define USE_META
+#define RESET_UBITS
 
 
 template<u64 NUMG, u64 LOGG, u64 LOGB, u64 TAGW, u64 GHIST>
@@ -17,6 +20,7 @@ struct tage : predictor {
   static constexpr u64 WEAK1 = 1<<(CTR-1);
   static constexpr u64 WEAK0 = WEAK1-1;
   static constexpr u64 METABITS = 4;
+  static constexpr u64 UCTRBITS = 8;
 
   ram<val<2>,NB> bim; // bimodal table
   ram<val<TAGW>,NG> gtag[NUMG]; // global tables tags
@@ -32,6 +36,7 @@ struct tage : predictor {
   reg<2> readb; // read bimodal counter
   arr<reg<CTR>,NUMG> readc; // read global counters
   arr<reg<1>,NUMG> readu; // read u bits
+  reg<NUMG> notumask; // read u bits, inverted
 
   reg<NUMG+1> match1; // longest match
   reg<NUMG+1> match2; // second longest match
@@ -43,6 +48,10 @@ struct tage : predictor {
 #ifdef USE_META
   reg<METABITS> meta; // select between pred1 and pred2
   reg<1> newly_alloc;
+#endif
+
+#ifdef RESET_UBITS
+  reg<UCTRBITS> uctr; // u bits counter (reset u bits when counter saturates)
 #endif
 
   static constexpr auto HLEN = [] () {
@@ -90,7 +99,8 @@ struct tage : predictor {
       readu[i] = ubit[i].read(gi[i]);
     }
     readc.fanout(hard<4>{});
-    readu.fanout(hard<2>{});
+    notumask = ~readu.concat();
+    notumask.fanout(hard<3>{});
     
     // extract prediction bits
     arr<val<1>,NUMG> gpreds = [&](int i) {return val<1>{readc[i]>>(CTR-1)};};
@@ -113,7 +123,7 @@ struct tage : predictor {
 #ifdef USE_META
     meta.fanout(hard<2>{});
     arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==hard<WEAK0>{}) | (readc[i]==hard<WEAK1>{});};
-    newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & ~readu.concat()) != hard<0>{};
+    newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & notumask) != hard<0>{};
     newly_alloc.fanout(hard<2>{});
     prediction = select(newly_alloc & val<1>{meta>>(METABITS-1)},pred2,pred1);
 #else
@@ -125,10 +135,9 @@ struct tage : predictor {
 
   void update(val<64> pc, val<1> dir)
   {
-    // TODO: periodic reset of u bits
     dir.fanout(hard<4+NUMG*2>{});
     auto goodpred = (prediction == dir);
-    goodpred.fanout(hard<1+NUMG>{});
+    goodpred.fanout(hard<NUMG+2>{});
     auto mispred = ~goodpred;
     mispred.fanout(hard<NUMG>{});
     auto altdiff = (match2 != 0) & (pred2 != pred1);
@@ -138,16 +147,17 @@ struct tage : predictor {
 #endif
     auto mispmask = mispred.replicate(hard<NUMG>{}).concat();
     auto postmask = mispmask.fo1() & val<NUMG>(match1-1);
-    postmask.fanout(hard<2>{});
-    auto candallocmask = postmask & ~readu.concat(); // candidate post entries for allocation
+    postmask.fanout(hard<3>{});
+    auto candallocmask = postmask & notumask; // candidate post entries for allocation
     candallocmask.fanout(hard<2>{});
     // if multiple candidate entries, we select a single one
     auto collamask = candallocmask.reverse();
     collamask.fanout(hard<2>{});
     auto collamask1 = collamask.one_hot();
-    collamask1.fanout(hard<2>{});
+    collamask1.fanout(hard<3>{});
     auto collamask2 = (collamask^collamask1).one_hot();
-    auto collamask12 = select(val<2>{rand()}==hard<0>{}, collamask2.fo1(), collamask1);
+    u64 randval = rand();
+    auto collamask12 = select(val<2>{randval}==hard<0>{}, collamask2.fo1(), collamask1);
     auto allocmask = collamask12.fo1().reverse();
     allocmask.fanout(hard<3>{});
     auto match1_split = match1.make_array(val<1>{});
@@ -174,6 +184,16 @@ struct tage : predictor {
     // update global history and folds
     auto branchbits = concat(val<5>{pc.fo1()},dir);
     gfolds.update(branchbits);
+#ifdef RESET_UBITS
+    uctr.fanout(hard<3>{});
+    auto allocmask1  = collamask1.reverse();
+    allocmask1.fanout(hard<2>{});
+    val<1> faralloc = (((match1>>3) | allocmask1).one_hot() ^ allocmask1) == hard<0>{};
+    val<1> uctrsat = (uctr == uctr.maxval);
+    uctrsat.fanout(hard<2>{});
+    uctr = select(goodpred,uctr,select(uctrsat,val<decltype(uctr)::size>{0},update_ctr(uctr,faralloc.fo1())));
+    execute_if(uctrsat,[&](){for (auto &uram : ubit) uram.reset();});
+#endif
   }
 
 };

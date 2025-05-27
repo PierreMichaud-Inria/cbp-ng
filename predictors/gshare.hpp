@@ -4,17 +4,21 @@
 using namespace hcm;
 
 
-template<u64 LOGN>
+template<u64 LOGN, u64 GHIST=10>
 struct gshare : predictor {
   static constexpr u64 N = 1<<LOGN;
-  reg<LOGN> ghist;
+  reg<GHIST> ghist;
   ram<val<2>,N> pht;
   reg<LOGN> index;
   reg<2> ctr;
   
   val<1> predict(val<64> pc)
   {
-    index = val<LOGN>(pc) ^ ghist;
+    if constexpr (GHIST <= LOGN) {
+      index = val<LOGN>(pc) ^ (ghist<<(LOGN-GHIST));
+    } else {
+      index = ghist.make_array(val<LOGN>{}).append(pc).fold_xor();
+    }
     ctr = pht.read(index);
     return val<1>(ctr>>1);
   }

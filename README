@@ -5,4 +5,4 @@ compile cbp
 cbp
 
 try another predictor:
-compile cbp -DPREDICTOR="gshare<18>"
+compile cbp -DPREDICTOR="gshare<16,10>"

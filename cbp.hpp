@@ -19,14 +19,13 @@ class simulator {
   uint64_t nmisp = 0;
   uint64_t max_pred_lat_ps = 0;
   uint64_t t = 0; // ps
-  //synthetic_trace<> strace{14,0.001};
-  synthetic_trace<1000,128,1024,5> strace{99,0.0};
   
-  auto next_branch()
+  auto next_branch(synthetic_trace &trace)
   {
-    auto [branch_pc,branch_dir,nextpc] = strace.next();
+    auto [branch_pc,branch_dir,nextpc] = trace.next();
     std::tuple branch {branch_pc,branch_dir,t};
     t += hcm::panel.clock_cycle_ps;
+    nbranch++;
     return branch;
   }
 
@@ -37,11 +36,10 @@ public:
     hcm::panel.clock_cycle_ps = 250;
   }
 
-  void run(predictor &p, int trace_length=10)
+  void run(predictor &p, synthetic_trace &trace, int trace_length=10)
   {
     for (int i=0; i<trace_length; i++) {
-      nbranch++;
-      auto [branch_pc,branch_dir,start_time] = next_branch();
+      auto [branch_pc,branch_dir,start_time] = next_branch(trace);
       auto [prediction,pred_time] = p.predict({branch_pc,start_time}).get_vt();
       assert(pred_time >= start_time);
       uint64_t latency_ps = pred_time - start_time;
@@ -57,7 +55,6 @@ public:
 
   ~simulator()
   {
-    strace.print_stats("synthetic trace ");
     std::cout << "branches: " << nbranch << std::endl;
     std::cout << "mispredicted: " << nmisp << std::endl;
     if (nbranch!=0)

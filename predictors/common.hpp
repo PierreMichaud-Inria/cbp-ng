@@ -60,9 +60,7 @@ struct folded_gh {
   {
     // left shift of global history corresponds to left rotate of folded history
     // the bit that is pushed out of the global history is XORed out of the folded history
-    static_assert(F<MAXL);
-    static_assert(in.size<=F);
-    constexpr u64 inbits = std::min(in.size,ghlen.value);
+    constexpr u64 inbits = std::min(F,std::min(in.size,ghlen.value));
     val<inbits> input = in.fo1(); // truncate input if longer than global history
     auto f = folded.make_array(val<1>{});
     static_assert(f.size==F);
