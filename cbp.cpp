@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 #include "synthetic_trace.hpp"
 #include "harcom.hpp"
 #include "cbp.hpp"

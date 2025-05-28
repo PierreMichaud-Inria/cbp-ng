@@ -4,7 +4,7 @@
 
 using namespace hcm;
 
-// this is a basic TAGE, not optimized
+// this is a basic TAGE, not necessarily well optimized
 
 
 #define USE_META

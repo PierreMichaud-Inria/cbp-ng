@@ -3094,6 +3094,32 @@ namespace hcm {
       return {reverse_bits(std::move(*this).get()) >> (bitwidth<T>-N), time()};
     }
 
+    [[nodiscard]] val rotate_left(intlike auto shift) & requires std::unsigned_integral<T> // lvalue
+    {
+      if (shift>=0) {
+	u64 k = shift%N;
+	auto [x,t] = get_vt();
+	auto y = x<<k | x>>(N-k);
+	return {y,t};
+      } else {
+	u64 k = -shift%N;
+	return rotate_left(N-k);
+      }
+    }
+
+    [[nodiscard]] val rotate_left(intlike auto shift) && requires std::unsigned_integral<T> // rvalue
+    {
+      if (shift>=0) {
+	u64 k = shift%N;
+	auto [x,t] = std::move(*this).get_vt();
+	auto y = x<<k | x>>(N-k);
+	return {y,t};
+      } else {
+	u64 k = -shift%N;
+	return std::move(*this).rotate_left(N-k);
+      }
+    }
+
     auto ones() & // lvalue
     {
       constexpr circuit c = (N>=2)? ADDN<1,N> : circuit{};
@@ -3610,7 +3636,11 @@ namespace hcm {
 
     T& operator[] (u64 i)
     {
-      return elem.at(i);
+      if (i>=N) {
+	std::cerr << "array bound exceeded (" << i << ">=" << N << ")" << std::endl;
+	std::terminate();
+      }
+      return elem[i];
     }
 
     template<valtype U>
@@ -3626,7 +3656,11 @@ namespace hcm {
 	panel.update_logic(c[0]); // MUX select
 	panel.update_logic(c[1]); // MUX data
 	auto [i,ti] = std::forward<U>(index).get_vt();
-	auto [d,td] = elem.at(i).get_vt(); // lvalue
+	if (i>=N) {
+	  std::cerr << "array bound exceeded (" << i << ">=" << N << ")" << std::endl;
+	  std::terminate();
+	}
+	auto [d,td] = elem[i].get_vt(); // lvalue
 	auto t = std::max(ti+c[0].delay(),td) + c[1].delay();
 	return {d,t};
       } else {
@@ -4073,7 +4107,11 @@ namespace hcm {
 
       void commit(ram &mem) const
       {
-	mem.data.at(addr) = dataval;
+	if (addr>=N) {
+	  std::cerr << "out-of-bounds RAM write (" << addr << ">=" << N << ")" << std::endl;
+	  std::terminate();
+	}
+	mem.data[addr] = dataval;
       }
     };
 
@@ -4135,7 +4173,11 @@ namespace hcm {
 	writes.pop_back();
       }
       t += std::llround(static_ram::LATENCY); // time at which the read completes
-      T readval = data.at(addr);
+      if (addr>=N) {
+	std::cerr << "out-of-bounds RAM read (" << addr << ">=" << N << ")" << std::endl;
+	std::terminate();
+      }
+      T readval = data[addr];
       readval.set_time(t);
       return readval;
     }
@@ -4195,7 +4237,11 @@ namespace hcm {
 
     auto operator[] (u64 i) const
     {
-      return data.at(i).to_ullong();
+      if (i>=N) {
+	std::cerr << "out-of-bounds ROM read (" << i << ">=" << N << ")" << std::endl;
+	std::terminate();
+      }
+      return data[i].to_ullong();
     }
   };
 
@@ -4838,7 +4884,6 @@ namespace hcm {
   // ###########################
   // UTILITIES
   // below are functions that do not need superuser rights
-
 
   // encode(x) takes a one-hot value and returns the index of the hot bit
   // if the input is not a one-hot value, the result is meaningless 

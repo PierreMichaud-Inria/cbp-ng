@@ -50,7 +50,7 @@ struct folded_gh {
   
   reg<F> folded; // initial value = 0 (consistent with global history)
 
-  reg<F>& get()
+  val<F> get()
   {
     return folded;
   }
@@ -106,7 +106,7 @@ struct geometric_folds {
   std::array<std::tuple<folded_gh<FOLDS>...>,NH> folds;
 
   template<u64 J>
-  auto& get(u64 i)
+  auto get(u64 i)
   {
     return std::get<J>(folds.at(i)).get();
   }
