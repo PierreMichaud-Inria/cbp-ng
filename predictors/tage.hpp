@@ -54,19 +54,6 @@ struct tage : predictor {
   reg<UCTRBITS> uctr; // u bits counter (reset u bits when counter saturates)
 #endif
 
-  static constexpr auto HLEN = [] () {
-    // geometric history lengths
-    // table 0 is the rightmost table and has the longest history    
-    std::array<u64,NUMG> hlen;
-    u64 prevhl = 0;
-    for (u64 i=0; i<NUMG; i++) {
-      u64 hl = MINHIST * pow(f64(GHIST)/MINHIST,f64(i)/(NUMG-1));
-      hl = std::max(prevhl+1,hl);
-      hlen[NUMG-1-i] = hl;
-      prevhl = hl;
-    }
-    return hlen;
-  }();
 
   tage()
   {
@@ -74,7 +61,7 @@ struct tage : predictor {
     std::cout << "TAGE bimodal entries: " << NB << std::endl;
     std::cout << "TAGE global entry tag length: " << TAGW << std::endl;
     std::cout << "TAGE history lengths: ";
-    for (u64 i=0; i<NUMG; i++) std::cout << HLEN[i] << " ";
+    for (u64 i=0; i<NUMG; i++) std::cout << gfolds.HLEN[i] << " ";
     std::cout << std::endl;
   }
 
@@ -82,11 +69,11 @@ struct tage : predictor {
   {
     pc.fanout(hard<1+NUMG*2>{});
     // compute indexes
-    bi = pc;
+    bi = pc>>2;
     bi.fanout(hard<2>{});
     for (u64 i=0; i<NUMG; i++) {
-      gi[i] = pc ^ gfolds.template get<0>(i);
-      gt[i] = val<TAGW>(pc).reverse() ^ gfolds.template get<1>(i);
+      gi[i] = pc>>2 ^ gfolds.template get<0>(i);
+      gt[i] = val<TAGW>(pc>>2).reverse() ^ gfolds.template get<1>(i);
     }
     gi.fanout(hard<6>{});  
     gt.fanout(hard<2>{});
@@ -123,7 +110,8 @@ struct tage : predictor {
 #ifdef USE_META
     meta.fanout(hard<2>{});
     arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==hard<WEAK0>{}) | (readc[i]==hard<WEAK1>{});};
-    newly_alloc = (val<NUMG>(match1) & weakctr.fo1().concat() & notumask) != hard<0>{};
+    arr<val<NUMG>,3> naconds = {match1,weakctr.fo1().concat(),notumask};
+    newly_alloc = naconds.fo1().fold_and() != hard<0>{};
     newly_alloc.fanout(hard<2>{});
     prediction = select(newly_alloc & val<1>{meta>>(METABITS-1)},pred2,pred1);
 #else
@@ -141,7 +129,7 @@ struct tage : predictor {
     auto mispred = ~goodpred;
     mispred.fanout(hard<NUMG>{});
     auto altdiff = (match2 != 0) & (pred2 != pred1);
-    altdiff.fanout(hard<1+NUMG>{});
+    altdiff.fanout(hard<NUMG+1>{});
 #ifdef USE_META
     execute_if(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
 #endif
@@ -182,7 +170,7 @@ struct tage : predictor {
       ubit[i].write(gi[i],select(umask_split[i].fo1(),goodpred,val<1>{0}));
     });
     // update global history and folds
-    auto branchbits = concat(val<5>{pc.fo1()},dir);
+    auto branchbits = concat(val<5>{pc.fo1()>>2},dir);
     gfolds.update(branchbits);
 #ifdef RESET_UBITS
     uctr.fanout(hard<3>{});

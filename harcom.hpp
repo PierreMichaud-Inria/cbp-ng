@@ -4000,7 +4000,7 @@ namespace hcm {
 	panel.update_logic(c);
 	auto data = get();
 	auto t = time() + c.delay();
-	atype x = 0;
+	atype x = -1;
 	for (auto e : data) x &= e;
 	return {x,t};
       } else if constexpr (N==1) {
@@ -4018,7 +4018,7 @@ namespace hcm {
 	panel.update_logic(c);
 	auto data = std::move(*this).get();
 	auto t = time() + c.delay();
-	atype x = 0;
+	atype x = -1;
 	for (auto e : data) x &= e;
 	return {x,t};
       } else if constexpr (N==1) {
