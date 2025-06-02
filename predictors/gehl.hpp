@@ -36,7 +36,12 @@ struct gehl : predictor {
 
   gehl()
   {
-
+    std::cout << "GEHL bias weights: " << NB << std::endl;
+    std::cout << "GEHL global weights: " << NUMG << " x " << NG << std::endl;
+    std::cout << "GEHL bits per weight: " << CTR << std::endl; 
+    std::cout << "GEHL history lengths: ";
+    for (u64 i=0; i<NUMG; i++) std::cout << gfolds.HLEN[i] << " ";
+    std::cout << std::endl;
   }
 
   val<1> predict(val<64> pc)
