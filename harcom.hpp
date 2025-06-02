@@ -1881,7 +1881,7 @@ namespace hcm {
     }
 
     // digital root with 2^K+1 mod D = 0
-    // TODO: Diamond et al., MICRO 2014 (use balanced ternary redundant format)
+    // TODO: Diamond et al., MICRO 2014 (use 1,0,-1 redundant format)
     constexpr u64 K = pow2_plus1(D,MAXKP);
     constexpr u64 ND = (K)? (N+K-1)/K : 0; // number of digits
     static_assert(K==0 || ND!=0);
@@ -2918,15 +2918,17 @@ namespace hcm {
 
     void operator= (val & x)
     {
+      static_assert(std::integral<T>);
       auto [xv,xt] = x.get_vt();
-      if (exec.active) data = xv;
+      if (exec.active) data = fit(xv);
       set_time(xt);
     }
 
     void operator= (val && x)
     {
+      static_assert(std::integral<T>);
       auto [xv,xt] = std::move(x).get_vt();
-      if (exec.active) data = xv;
+      if (exec.active) data = fit(xv);
       set_time(xt);
     }
 
@@ -3399,7 +3401,7 @@ namespace hcm {
     split(T && x)
     {
       static_assert(x.size == L+R,"incorrect use of split<L,R>");
-      static_assert(std::unsigned_integral<base<T>>,"can only split an unsigned value");
+      //static_assert(std::unsigned_integral<base<T>>,"can only split an unsigned value");
       auto [data,t] = std::forward<T>(x).get_vt();
       right = {data,t};
       if constexpr (R<64) {
@@ -4529,7 +4531,7 @@ namespace hcm {
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   auto operator+ (T1&& x1, T2&& x2)
   {
-    constexpr circuit c = ADD<valt<T1,T2>::size>;
+    constexpr circuit c = (x1.size==1)? INC<x2.size> : (x2.size==1)? INC<x1.size> : ADD<valt<T1,T2>::size>;
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     auto [v2,t2] = proxy::get_vt(std::forward<T2>(x2));
@@ -4884,6 +4886,13 @@ namespace hcm {
   // ###########################
   // UTILITIES
   // below are functions that do not need superuser rights
+
+  template<u64 N, typename T>
+  [[nodiscard]] val<N> absolute_value(val<N,T> x)
+  {
+    static_assert(std::signed_integral<T>);
+    return select(x < hard<0>{},-x,x);
+  }
 
   // encode(x) takes a one-hot value and returns the index of the hot bit
   // if the input is not a one-hot value, the result is meaningless 

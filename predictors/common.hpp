@@ -7,12 +7,12 @@ using namespace hcm;
 
 
 // up-down saturating counter update function
-template<u64 N>
-[[nodiscard]] val<N> update_ctr(val<N> ctr, val<1> incr)
+template<u64 N, typename T>
+[[nodiscard]] val<N,T> update_ctr(val<N,T> ctr, val<1> incr)
 {
   ctr.fanout(hard<6>{});
-  val<N> incsat = select(ctr==hard<ctr.maxval>{},ctr,val<N>{ctr+1});
-  val<N> decsat = select(ctr==hard<ctr.minval>{},ctr,val<N>{ctr-1});
+  val<N,T> incsat = select(ctr==hard<ctr.maxval>{},ctr,val<N,T>{ctr+1});
+  val<N,T> decsat = select(ctr==hard<ctr.minval>{},ctr,val<N,T>{ctr-1});
   return select(incr.fo1(),incsat.fo1(),decsat.fo1());
 }
 
@@ -55,6 +55,11 @@ struct folded_gh {
     return folded;
   }
 
+  void fanout(hardval auto fo)
+  {
+    folded.fanout(fo);
+  }
+  
   template<u64 MAXL>
   void update(global_history<MAXL> &gh, hardval auto ghlen, valtype auto in)
   {
@@ -85,7 +90,7 @@ struct folded_gh {
 // FOLDS = fold sizes (in bits)
 template<u64 NH, u64 MINH, u64 MAXH, u64... FOLDS>
 struct geometric_folds {
-  static_assert(NH!=0);
+  static_assert(NH>=2);
   static constexpr u64 NF = sizeof...(FOLDS); // number of folds per history length
 
   static constexpr auto HLEN = [] () {
@@ -105,18 +110,32 @@ struct geometric_folds {
   global_history<MAXH> gh;
   std::array<std::tuple<folded_gh<FOLDS>...>,NH> folds;
 
-  template<u64 J>
+  template<u64 J=0>
   auto get(u64 i)
   {
-    return std::get<J>(folds.at(i)).get();
+    if (i>=NH) {
+      std::cerr << "geometric folds: out of bound access\n";
+      std::terminate();
+    }
+    return std::get<J>(folds[i]).get();
   }
 
+  void fanout(hardval auto fo)
+  {
+    for (u64 i=0; i<NH; i++) {
+      static_loop<NF>([&]<u64 J>(){
+	std::get<J>(folds[i]).fanout(fo);
+      });
+    }
+  }
+  
   void update(valtype auto branchbits)
   {
     // update folds before global history
     branchbits.fanout(hard<NH*NF+1>{});
     static_loop<NH>([&]<u64 I>(){
-      gh[HLEN[I]-1].fanout(hard<NF>{});
+      if constexpr (NF>1)
+	gh[HLEN[I]-1].fanout(hard<NF>{});
       static_loop<NF>([&]<u64 J>(){
 	std::get<J>(folds[I]).update(gh,hard<HLEN[I]>{},branchbits);
       });

@@ -57,6 +57,9 @@ struct tage : predictor {
 
   tage()
   {
+    if (LOGG == TAGW) {
+      std::cout << "WARNING: the tag function and index function are not different enough\n";
+    }
     std::cout << "TAGE global entries: " << NUMG << " x " << NG << std::endl;
     std::cout << "TAGE bimodal entries: " << NB << std::endl;
     std::cout << "TAGE global entry tag length: " << TAGW << std::endl;
@@ -68,6 +71,7 @@ struct tage : predictor {
   val<1> predict(val<64> pc)
   {
     pc.fanout(hard<1+NUMG*2>{});
+    gfolds.fanout(hard<2>{});
     // compute indexes
     bi = pc>>2;
     bi.fanout(hard<2>{});
@@ -110,10 +114,11 @@ struct tage : predictor {
 #ifdef USE_META
     meta.fanout(hard<2>{});
     arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==hard<WEAK0>{}) | (readc[i]==hard<WEAK1>{});};
-    arr<val<NUMG>,3> naconds = {match1,weakctr.fo1().concat(),notumask};
+    arr<val<NUMG>,3> naconds = {match1, weakctr.fo1().concat(), notumask};
     newly_alloc = naconds.fo1().fold_and() != hard<0>{};
     newly_alloc.fanout(hard<2>{});
-    prediction = select(newly_alloc & val<1>{meta>>(METABITS-1)},pred2,pred1);
+    arr<val<1>,3> altselconds = {newly_alloc, val<1>{meta>>(METABITS-1)}, match2!=hard<0>{}};
+    prediction = select(altselconds.fo1().fold_and(),pred2,pred1);
 #else
     prediction = pred1;
 #endif
