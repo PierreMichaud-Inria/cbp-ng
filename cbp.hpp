@@ -14,7 +14,7 @@ struct predictor {
 };
 
 
-class simulator {
+class harcom_superuser {
   uint64_t nbranch = 0;
   uint64_t nmisp = 0;
   uint64_t max_pred_lat_ps = 0;
@@ -31,7 +31,7 @@ class simulator {
 
 public:
 
-  simulator()
+  harcom_superuser()
   {
     hcm::panel.clock_cycle_ps = 250;
   }
@@ -53,7 +53,7 @@ public:
     }
   }
 
-  ~simulator()
+  ~harcom_superuser()
   {
     std::cout << "branches: " << nbranch << std::endl;
     std::cout << "mispredicted: " << nmisp << std::endl;
@@ -63,3 +63,4 @@ public:
     std::cout << "max prediction latency (cycle): " << double(max_pred_lat_ps) / hcm::panel.clock_cycle_ps << std::endl;
   }
 };
+

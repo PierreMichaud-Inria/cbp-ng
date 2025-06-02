@@ -5,7 +5,7 @@
 #include "cbp.hpp"
 #include "branch_predictor.hpp"
 
-simulator sim;
+harcom_superuser sim;
 branch_predictor pred;
 std::vector<synthetic_trace> traces;
 

@@ -45,7 +45,7 @@
 #include <exception>
 
 
-class simulator; // has access to private members of class "val"
+class harcom_superuser; // has access to private members of class "val"
 
 
 namespace hcm {
@@ -2688,7 +2688,7 @@ namespace hcm {
   template<typename T> requires (std::integral<T> || std::floating_point<T>)
   class global {
     friend class globals;
-    friend class ::simulator;
+    friend class ::harcom_superuser;
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
     template<memdatatype,u64> friend class ram;
@@ -2717,7 +2717,7 @@ namespace hcm {
     template<valtype,u64> friend class arr;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
-    friend class ::simulator;
+    friend class ::harcom_superuser;
     static constexpr u64 first_cycle = 1;
   public:
     global<u64> clock_cycle_ps = 300;
@@ -2827,7 +2827,7 @@ namespace hcm {
     template<valtype, u64> friend class arr;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
-    friend class ::simulator;
+    friend class ::harcom_superuser;
     template<valtype U, action A> friend auto execute_if(U&&,const A&);
 
   private:
@@ -3494,7 +3494,7 @@ namespace hcm {
     template<u64,arith> friend class val;
     template<memdatatype,u64> friend class ram;
     friend class proxy;
-    friend class ::simulator;
+    friend class ::harcom_superuser;
   public:
     static constexpr u64 size = N;
     using type = T;

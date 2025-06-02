@@ -1,3 +1,7 @@
+need recent compiler (C++20)
+gcc: version 12 or later (version 11 maybe, not tested)
+clang: not tested (at least version 18)
+
 chmod u+x compile
 
 simulate the default TAGE predictor:
