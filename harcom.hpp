@@ -2480,6 +2480,9 @@ namespace hcm {
   template<u64 N> requires (N>=2)
   inline constexpr circuit XOR = reduction(N,[](f64 co){return xor2(co);},OUTCAP);
 
+  template<u64 N> requires (N>=2)
+  inline constexpr circuit XNOR = reduction(N,[](f64 co){return xnor2(co);},OUTCAP);
+
   template<u64 WIDTH>
   inline constexpr circuit ADD = adder_ks<false,false>(WIDTH,OUTCAP);
 
@@ -3992,7 +3995,7 @@ namespace hcm {
       } else {
 	return 0;
       }
-    }    
+    }
 
     [[nodiscard]] valt<T> fold_and() & // lvalue
     {
@@ -4066,7 +4069,115 @@ namespace hcm {
       } else {
 	return valt<T>{0};
       }
-    }    
+    }
+
+    [[nodiscard]] valt<T> fold_nor() & // lvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr circuit c = NOR<N> * T::size;
+	panel.update_logic(c);
+	auto data = get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x |= e;
+	return {~x,t};
+      } else if constexpr (N==1) {
+	return ~elem[0];
+      } else {
+	return 0;
+      }
+    }
+
+    [[nodiscard]] valt<T> fold_nor() && // rvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr circuit c = NOR<N> * T::size;
+	panel.update_logic(c);
+	auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x |= e;
+	return {~x,t};
+      } else if constexpr (N==1) {
+	return ~std::move(elem[0]);
+      } else {
+	return 0;
+      }
+    }
+
+    [[nodiscard]] valt<T> fold_nand() & // lvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr circuit c = NAND<N> * T::size;
+	panel.update_logic(c);
+	auto data = get();
+	auto t = time() + c.delay();
+	atype x = -1;
+	for (auto e : data) x &= e;
+	return {~x,t};
+      } else if constexpr (N==1) {
+	return ~elem[0];
+      } else {
+	return 0;
+      }
+    }
+
+    [[nodiscard]] valt<T> fold_nand() && // rvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr circuit c = NAND<N> * T::size;
+	panel.update_logic(c);
+	auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = -1;
+	for (auto e : data) x &= e;
+	return {~x,t};
+      } else if constexpr (N==1) {
+	return ~std::move(elem[0]);
+      } else {
+	return 0;
+      }
+    }
+
+    [[nodiscard]] valt<T> fold_xnor() & // lvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr circuit c = XNOR<N> * T::size;
+	panel.update_logic(c);
+	auto data = get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x ^= e;
+	return {~x,t};
+      } else if constexpr (N==1) {
+	return ~elem[0];
+      } else {
+	return 0;
+      }
+    }
+
+    [[nodiscard]] valt<T> fold_xnor() && // rvalue
+    {
+      static_assert(ival<T>);
+      if constexpr (N>=2) {
+	constexpr circuit c = XNOR<N> * T::size;
+	panel.update_logic(c);
+	auto data = std::move(*this).get();
+	auto t = time() + c.delay();
+	atype x = 0;
+	for (auto e : data) x ^= e;
+	return {~x,t};
+      } else if constexpr (N==1) {
+	return ~std::move(elem[0]);
+      } else {
+	return 0;
+      }
+    }
   };
 
 
@@ -4885,7 +4996,7 @@ namespace hcm {
 
   // ###########################
   // UTILITIES
-  // below are functions that do not need superuser rights
+  // below are functions that users could write themselves
 
   template<u64 N, typename T>
   [[nodiscard]] val<N> absolute_value(val<N,T> x)
