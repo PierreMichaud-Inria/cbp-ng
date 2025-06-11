@@ -2,9 +2,4 @@
 
 * is there a SRAM cost function that makes the SRAM behavior monotonic?
 
-########################################
-Maybe:
-
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
-
-* floating point
