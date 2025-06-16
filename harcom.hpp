@@ -3336,9 +3336,12 @@ namespace hcm {
     template<valtype T1, intlike T2> requires (ival<T1>)
     friend valt<T1> operator<< (T1&&, T2);
 
-    template<valtype T1, intlike T2> requires (ival<T1>)
+    template<valtype T1, intlike T2> requires (std::unsigned_integral<base<T1>>)
     friend valt<T1> operator>> (T1&&, T2);
-    
+
+    template<valtype T1, intlike T2> requires (std::signed_integral<base<T1>>)
+    friend valt<T1> operator>> (T1&&, T2);    
+
     template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
     friend auto operator* (T1&&, T2&&);
 
@@ -4722,12 +4725,23 @@ namespace hcm {
   }
 
   // RIGHT SHIFT
-  template<valtype T1, intlike T2> requires (ival<T1>) // 2nd arg constant
+  template<valtype T1, intlike T2> requires (std::unsigned_integral<base<T1>>) // 2nd arg constant
   valt<T1> operator>> (T1&& x1, T2 x2)
   {
     // no transistors
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {v1>>x2, t1};
+  }
+
+  template<valtype T1, intlike T2> requires (std::signed_integral<base<T1>>) // 2nd arg constant
+  valt<T1> operator>> (T1&& x1, T2 x2)
+  {
+    // the sign bit is replicated
+    static_assert(hardval<T2>,"right shift of signed integer: shift amount must be a hard value");
+    constexpr circuit c = buffer(x2*INVCAP,false);
+    proxy::update_logic(c);
+    auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
+    return {v1>>x2, t1+c.delay()};
   }
 
   // MULTIPLICATION
