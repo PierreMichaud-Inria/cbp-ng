@@ -4738,7 +4738,7 @@ namespace hcm {
   {
     // the sign bit is replicated
     static_assert(hardval<T2>,"right shift of signed integer: shift amount must be a hard value");
-    constexpr circuit c = buffer(x2*INVCAP,false);
+    constexpr circuit c = REP<1,x2+1>; // do not use a buffer here (see comment in REP's definition)
     proxy::update_logic(c);
     auto [v1,t1] = proxy::get_vt(std::forward<T1>(x1));
     return {v1>>x2, t1+c.delay()};
