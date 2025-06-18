@@ -3179,6 +3179,7 @@ namespace hcm {
       fanout(hard<M>{});
       arr<val,M> a;
       for (u64 i=0; i<M; i++) a[i] = *this;
+      std::move(*this).get(); // destructive read
       return a;
     }
 
