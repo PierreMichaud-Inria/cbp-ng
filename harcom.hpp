@@ -2854,6 +2854,7 @@ namespace hcm {
 
     void set_time(u64 t)
     {
+      // update even when exec.active is false (potential timing)
       timing = t;
     }
 
@@ -2891,7 +2892,7 @@ namespace hcm {
     {
       auto old_data = data;
 #ifndef FREE_FANOUT
-      data = 0; // destructive read
+      data = 0; // destructive read (exec.active irrelevant)
 #endif
       return old_data;
     }
@@ -2905,10 +2906,15 @@ namespace hcm {
     T get() && requires std::signed_integral<T> // rvalue
     {
       auto old_data = sign_extended();
-      data = 0; // destructive read
+      data = 0; // destructive read (exec.active irrelevant)
       return old_data;
     }
 
+    u64 time() const
+    {
+      return std::max(exec.time,timing);
+    }
+    
     auto get_vt() & // lvalue
     {
       return std::tuple {get(),time()}; // list initialization, get() executes before time()
@@ -2945,11 +2951,6 @@ namespace hcm {
 #ifdef CHEATING_MODE
     operator T() {return data;}
 #endif
-
-    u64 time() const
-    {
-      return std::max(exec.time,timing);
-    }
 
     static constexpr T maxval = []() {
       if constexpr (N == bitwidth<T>) {
@@ -4964,13 +4965,14 @@ namespace hcm {
   template<valtype T, action A> requires (std::same_as<return_type<A>,void>)
   void execute_if(T &&mask, const A &f)
   {
+    // FIXME: the delay/energy for gating the execution is not modeled
     static_assert(std::unsigned_integral<base<T>>);
     auto prev_exec = exec;
     auto [m,t] = proxy::get_vt(std::forward<T>(mask));
     for (u64 i=0; i<valt<T>::size; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
-      // to prevent cheating, we execute the action even when the condition is false
+      // we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<A>) {
 	f();
@@ -4985,17 +4987,22 @@ namespace hcm {
   template<valtype T, action A>
   [[nodiscard]] auto execute_if(T &&mask, const A &f)
   {
+    // FIXME: the delay/energy for gating the execution is not modeled
     static_assert(valtype<return_type<A>>);
     static_assert(std::unsigned_integral<base<T>>);
     constexpr u64 N = valt<T>::size;
     using rtype = valt<return_type<A>>;
+    // return 0 if the condition is false (AND gate)
+    constexpr circuit out = AND<2> * rtype::size;
+    constexpr circuit buf = buffer(AND<2>.ci*rtype::size,false);
+    proxy::update_logic((buf+out)*N);
     auto prev_exec = exec;
     auto [m,t] = proxy::get_vt(std::forward<T>(mask));
     arr<rtype,N> result;
     for (u64 i=0; i<N; i++) {
       bool cond = (m>>i) & 1;
       exec.set_state(cond,t);
-      // to prevent cheating, we execute the action even when the condition is false
+      // we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<A>) {
 	result[i] = f();
@@ -5003,6 +5010,7 @@ namespace hcm {
 	static_assert(std::invocable<A,u64>);
 	result[i] = f(i);
       }
+      result[i].set_time(std::max(result[i].time(),t+buf.delay())+out.delay());
     };
     exec = prev_exec;
     return result;
