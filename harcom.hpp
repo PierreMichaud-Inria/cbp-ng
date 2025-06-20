@@ -2728,8 +2728,8 @@ namespace hcm {
     global<u64> storage;
     global<u64> storage_sram;
     global<f64> energy_fJ;
-    global<u64> transistors[2];
-    global<u64> transistors_init;
+    global<u64> storage_xtors;
+    global<u64> logic_xtors[2];
 
   private:
     global<bool> storage_destroyed = false;
@@ -2741,16 +2741,16 @@ namespace hcm {
 	std::terminate();
       }
       cycle++;
-      transistors[1] = transistors[0];
-      transistors[0] = 0;
+      logic_xtors[1] = logic_xtors[0];
+      logic_xtors[0] = 0;
     }
 
     void update_xtors(u64 xtors, bool init)
     {
       if (init) {
-	transistors_init += xtors;
+	storage_xtors += xtors;
       } else {
-	transistors[0] += xtors;
+	logic_xtors[0] += xtors;
       }
     }
 
@@ -2773,22 +2773,22 @@ namespace hcm {
 
   public:
 
-    u64 total_transistors()
+    u64 total_xtors()
     {
-      return transistors_init + transistors[cycle!=first_cycle];
+      return storage_xtors + logic_xtors[cycle!=first_cycle];
     }
 
-    f64 dynamic_power_mW()
+    f64 dyn_power_mW()
     {
       assert(cycle>first_cycle);
       assert(clock_cycle_ps != 0);
       return energy_fJ / ((cycle-first_cycle)*clock_cycle_ps); // mW
     }
 
-    f64 static_power_mW()
+    f64 sta_power_mW()
     {
       // FIXME: not all transistors are single fin
-      u64 xtors = total_transistors();
+      u64 xtors = total_xtors();
       u64 xtors_sram = storage_sram * SRAM_CELL.transistors;
       assert(xtors >= xtors_sram);
       u64 xtors_logic = xtors - xtors_sram;
@@ -2804,13 +2804,13 @@ namespace hcm {
 	os << "clock frequency (GHz): " << 1000./clock_cycle_ps << std::endl;
       }
       storage.print("storage (bits): ",os);
-      os << "transistors: " << total_transistors() << std::endl;
+      os << "transistors: " << total_xtors() << std::endl;
       if (cycle == first_cycle) {
 	energy_fJ.print("dynamic energy (fJ): ",os);	
       } else if (clock_cycle_ps != 0) {
-	os << "dynamic power (mW): " << dynamic_power_mW() << std::endl;
+	os << "dynamic power (mW): " << dyn_power_mW() << std::endl;
       }
-      os << "static power (mW): " << static_power_mW() << std::endl;
+      os << "static power (mW): " << sta_power_mW() << std::endl;
     }
   } panel;
 
@@ -4212,7 +4212,7 @@ namespace hcm {
     using static_ram = sram<N,rawdata<T>::width>;
 
   private:
-    std::array<valuetype,N> data;
+    std::array<valuetype,N> data {};
     u64 last_read_cycle = 0;
     u64 last_write_cycle = 0;
 
@@ -4225,10 +4225,7 @@ namespace hcm {
 
       void commit(ram &mem) const
       {
-	if (addr>=N) {
-	  std::cerr << "out-of-bounds RAM write (" << addr << ">=" << N << ")" << std::endl;
-	  std::terminate();
-	}
+	assert(addr<N);
 	mem.data[addr] = dataval;
       }
     };
@@ -4268,6 +4265,10 @@ namespace hcm {
       if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
       auto [av,at] = proxy::get_vt(std::forward<TYPEA>(address));
+      if (is_less(av,0) || is_greater_equal(av,N)) {
+	std::cerr << "out-of-bounds RAM write (N=" << N << "; addr=" << av << ")" << std::endl;
+	std::terminate();
+      }
       auto dv = proxy::get(std::forward<TYPED>(dataval));
       auto dt = proxy::time(dataval);
       writes.push_back({u64(av),valuetype(dv),std::max(at,dt)});
@@ -4291,8 +4292,8 @@ namespace hcm {
 	writes.pop_back();
       }
       t += std::llround(static_ram::LATENCY); // time at which the read completes
-      if (addr>=N) {
-	std::cerr << "out-of-bounds RAM read (" << addr << ">=" << N << ")" << std::endl;
+      if (is_less(addr,0) || is_greater_equal(addr,N)) {
+	std::cerr << "out-of-bounds RAM read (N=" << N << "; addr=" << addr << ")" << std::endl;
 	std::terminate();
       }
       T readval = data[addr];
@@ -5024,7 +5025,7 @@ namespace hcm {
   template<u64 N, typename T>
   [[nodiscard]] val<N> absolute_value(val<N,T> x)
   {
-    static_assert(std::signed_integral<T>);
+    static_assert(std::signed_integral<T>,"unsigned value is always positive");
     return select(x < hard<0>{},-x,x);
   }
 
