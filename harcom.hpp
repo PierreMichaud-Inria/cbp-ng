@@ -2835,7 +2835,7 @@ namespace hcm {
 
   private:
     T data = 0;
-    u64 timing = 0; // time
+    u64 timing = 0; // time (picoseconds)
     u64 read_credit = 0;
 
     T fit(T x) const requires std::integral<T>
@@ -3554,8 +3554,6 @@ namespace hcm {
       for (u64 i=0; i<N; i++) elem[i].set_time(t);
     }
 
-  public:
-
     u64 time() const
     {
       u64 t = 0;
@@ -3565,6 +3563,8 @@ namespace hcm {
       return t;
     }
 
+  public:
+    
     arr() {}
 
     arr(arr &other)
