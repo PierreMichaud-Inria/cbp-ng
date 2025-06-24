@@ -3000,8 +3000,6 @@ namespace hcm {
 
     val(val &x) : val{x.get(),x.time()} {} // list initialization, get() executes before time()
 
-    val(const val &&x) : val{std::move(x).get(),x.time()} {} // list initialization
-
     template<valtype U> requires std::unsigned_integral<T>
     val(U &&x) : val{to_unsigned(std::forward<U>(x).get()),x.time()} {} // list initialization
 
@@ -3528,11 +3526,6 @@ namespace hcm {
       copy_from(other);
     }
 
-    void operator= (const arr &&other)
-    {
-      copy_from(std::move(other));
-    }
-
     void operator& () = delete;
 
     auto get() & // lvalue
@@ -3570,11 +3563,6 @@ namespace hcm {
     arr(arr &other)
     {
       copy_from(other);
-    }
-
-    arr(const arr &&other)
-    {
-      copy_from(std::move(other));
     }
 
     template<std::convertible_to<T> ...U>
@@ -3621,11 +3609,6 @@ namespace hcm {
     void operator= (arr &other) requires (regtype<T>)
     {
       copy_from(other);
-    }
-
-    void operator= (const arr &&other) requires (regtype<T>)
-    {
-      copy_from(std::move(other));
     }
 
     template<arrtype U> requires (regtype<T>)
@@ -4232,8 +4215,8 @@ namespace hcm {
 
     std::vector<writeop> writes; // pending writes
 
-    ram(ram &) = delete;
-    ram& operator= (ram&) = delete;
+    ram(const ram&) = delete;
+    ram& operator= (const ram&) = delete;
     void operator& () = delete;
 
   public:
@@ -5038,7 +5021,7 @@ namespace hcm {
     static_assert(N!=0);
     constexpr u64 W = std::bit_width(N-1);
     auto xbits = x.fo1().make_array(val<1>{});
-    arr<val<W>,N> a = [&](int i){return i & xbits[i].replicate(hard<W>{}).concat();};
+    arr<val<W>,N> a = [&](u64 i){return i & xbits[i].replicate(hard<W>{}).concat();};
     return a.fo1().fold_or();
   }
 
