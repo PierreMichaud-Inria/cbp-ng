@@ -1908,7 +1908,7 @@ namespace hcm {
       return bufs + csa + reduc;
     } else {
       // odd divisor, general method (inefficient)
-      static_assert(D>=3);
+      assert(D>=3);
       // L = ceil(log2(D-1))
       // x mod D = {[(ceil(2^(N+L)/D) * x) mod 2^(N+L)] * D} div 2^(N+L)
       constexpr u64 M = std::bit_width(D-2);
