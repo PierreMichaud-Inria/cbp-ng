@@ -484,8 +484,9 @@ namespace hcm {
   {
     // approximate distributed RC line as lumped PI1 circuit (Rao, DAC 1995)
     f64 ElmoreDelay = res * (wirecap_pF/2 + loadcap_pF); // ps
-    // RC delay approximately equal to Elmore delay x ln(2) (Gupta et al., IEEE TCAD jan 1997)
-    return ElmoreDelay * log(2); // ps
+    // the Elmore delay is a good approximation when the input voltage varies slowly
+    // see Gupta et al., IEEE TCAD jan 1997
+    return ElmoreDelay;
   }
 
 
@@ -544,9 +545,9 @@ namespace hcm {
 
     constexpr f64 gate_energy(f64 bias) const
     {
-      // TODO: static power, short circuit
+      // neglected: short-circuit currents, and glitches
+      // rough approximation of switching capacitance (FIXME?)
       f64 c = (1+PINV) * CGATE_fF * cg; // switching capacitance (fF)
-      // FIXME: not all drain capacitances switch
       return energy_fJ(c,VDD) * proba_switch(bias); // fJ
     }
 
@@ -1956,7 +1957,7 @@ namespace hcm {
 
     static constexpr circuit clocking = []() {
       f64 phicap2 = inv_tri{}.icap<2>() * 4;
-      circuit clock2 = wire<4.>(width,false,(phicap2+clock1.ci)*N); // slave-latch clock
+      circuit clock2 = wire<4.,DSMAX,0>(width,false,(phicap2+clock1.ci)*N); // slave-latch clock
       return clock2 + clock1 * N;
     } ();
 
