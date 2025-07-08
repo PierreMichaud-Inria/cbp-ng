@@ -465,18 +465,14 @@ namespace hcm {
   // however we underestimate the energy (2-fin transistor has larger gate capacitance)
 
   inline constexpr f64 DSE = 6; // default stage effort (delay vs energy tradeoff)
-  // The size of a transistor is limited in practice.
-  // However, for consistency with certain limitations and freedoms of the library
-  // (no floorplanning except for SRAM, so wire lengths are generally unknown and not modeled,
-  // yet the user can define unlimited fanout), we do not limit the maximum scale
-  inline constexpr u64 DSMAX = std::numeric_limits<u64>::max(); // default maximum scale is unlimited
+  inline constexpr u64 DSMAX = std::numeric_limits<u64>::max(); // default maximum scale is unlimited (FIXME?)
 
 
   constexpr f64 energy_fJ(f64 cap_fF, f64 vdiff/*volt*/)
   {
-    // energy dissipated for changing capacitance voltage by VDIFF
+    // energy dissipated for charging a capacitance by VDIFF>0, then discharging by -VDIFF 
     assert(vdiff>0);
-    return cap_fF * vdiff * (VDD - vdiff/2); // fJ
+    return cap_fF * vdiff * VDD; // fJ
   }
 
 
@@ -548,7 +544,7 @@ namespace hcm {
       // neglected: short-circuit currents, and glitches
       // rough approximation of switching capacitance (FIXME?)
       f64 c = (1+PINV) * CGATE_fF * cg; // switching capacitance (fF)
-      return energy_fJ(c,VDD) * proba_switch(bias); // fJ
+      return proba_switch(bias) * energy_fJ(c,VDD) * 0.5; // fJ
     }
 
     constexpr f64 cost() const
@@ -768,7 +764,7 @@ namespace hcm {
     c.w = length;
     c.d += wire_res_delay(METALRES[L]*seglen, cseg*CGATE_pF, rep.ci*CGATE_pF) * (nseg-1);
     c.d += wire_res_delay(METALRES[L]*seglen, cseg*CGATE_pF, co*CGATE_pF); // last segment
-    c.e += energy_fJ(METALCAP_fF*length,VDD) * proba_switch(bias);
+    c.e += proba_switch(bias) * energy_fJ(METALCAP_fF*length,VDD) * 0.5;
     if (c.nogate()) c.ci = cfirst; // just a wire
     return c;
   }
@@ -1310,6 +1306,8 @@ namespace hcm {
   {
     // Kogge-Stone adder (radix-2)
     // wire capacitance not modeled (TODO?)
+    // see Harris & Sutherland, "Logical effort of carry propagate adders",
+    // Asilomar Conference on Signals, Systems & Computers, 2003
     assert(n!=0);
     if (n==1) {
       return (CARRYIN)? full_adder<INCR>(co) : half_adder<INCR>(co);
@@ -2088,7 +2086,7 @@ namespace hcm {
     // gates layout in peripheric logic is constrained by the wordline/bitline pitch
     // not sure to what extent this limits the gate size (TODO?)
     static constexpr u64 SMAX = 40;
-    static constexpr f64 SEFF = 12.;
+    static constexpr f64 SEFF = 12;
     
     static constexpr circuit RDEC = decode2<SEFF,SMAX>(N,M*WLCAP,SRAM_CELL.bitline_length); // row decoder
 
@@ -2116,7 +2114,7 @@ namespace hcm {
 	  circuit BUFTRI = buffer<SEFF>(CSEL,false) | buffer<SEFF>(CSEL,true);
 	  circuit CDEC = decode2<SEFF>(DEMUX,BUFTRI.ci);
 	  wdr[0] = CDEC + BUFTRI * DEMUX;
-	  wdr[0].e += energy_fJ(WLCAP*M*CGATE_fF,VDD) * 2; // two wires switch (worst case)
+	  wdr[0].e += energy_fJ(WLCAP*M*CGATE_fF,VDD); // two wires switch (worst case)
 	} else {
 	  // predecode outputs run parallel to wordlines, AND2 gates are replicated (D replicas)
 	  circuit BUFTRI = buffer<SEFF>(CTRI,false) | buffer<SEFF>(CTRI,true);
@@ -2124,7 +2122,7 @@ namespace hcm {
 	  wdr[0] = CDEC + BUFTRI * M;
 	}
 	wdr[1] = buffer<SEFF>((BLBUF.ci+WLCAP)*DEMUX,false);
-	wdr[1].e += energy_fJ(WLCAP*DEMUX*CGATE_fF,VDD) * 0.5/*switch proba*/;
+	wdr[1].e += 0.5 * energy_fJ(WLCAP*DEMUX*CGATE_fF,VDD) * 0.5/*switch proba*/;
       }
       wdr[1] = wdr[1] * D + BLBUF * M;
       return wdr;
@@ -2136,11 +2134,11 @@ namespace hcm {
     static constexpr circuit WLSEL = ABUS + RDEC;
 
     static constexpr f64 EWCL = D * 2 * inv{}.make(INVCAP).e; // cell energy per write
-    static constexpr f64 EWL = 2 * energy_fJ(WLCAP_fF*M,VDD); // one wordline switches on and off
+    static constexpr f64 EWL = energy_fJ(WLCAP_fF*M,VDD); // one wordline switches on and off
     // currently, assume perfect bitline voltage clamping (TODO?)
     // half-selected bitlines (D<M) consume energy on read (neglect on write, TODO?)
-    static constexpr f64 EBLR = M * energy_fJ(N*BLCAP_fF,BLSWING) * 2; // bitline read + precharge
-    static constexpr f64 EBLW = D * energy_fJ(N*BLCAP_fF,VDD) * 2; // bitline write + precharge
+    static constexpr f64 EBLR = M * energy_fJ(N*BLCAP_fF,BLSWING); // bitline read + precharge
+    static constexpr f64 EBLW = D * energy_fJ(N*BLCAP_fF,VDD); // bitline write + precharge
 
     static constexpr u64 CELL_XTORS = SRAM_CELL.transistors * N * M;
     static constexpr u64 PERI_XTORS = WLSEL.t + SA.t + WDR[0].t + WDR[1].t + CMUX[0].t + CMUX[1].t;
