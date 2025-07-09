@@ -755,9 +755,10 @@ namespace hcm {
     seglen = length / nseg; // segment length (um)
     f64 cseg = linearcap * seglen; // wire segment capacitance relative to CGATE
     // transistors:
-    f64 cfirst = cseg + ((nseg==1)? co : 0);
+    f64 repcap = inv{}.icap() * invscale;
+    f64 cfirst = cseg + ((nseg==1)? co : repcap);
     circuit c = buffer<SE,SMAX>(cfirst,(nseg-1+cpl)&1,1,bias);
-    circuit rep = inv{}.make(cseg,invscale,bias); // repeater = inverter
+    circuit rep = inv{}.make(cseg+repcap,invscale,bias); // repeater = inverter
     for (u64 i=1; i<(nseg-1); i++) c = c + rep;
     if (nseg>1) c = c + inv{}.make(cseg+co,invscale,bias); // last segment drives output cap
     // wire:
@@ -2050,7 +2051,7 @@ namespace hcm {
     // SA intrinsic delay
     static constexpr f64 SADELAY = 2 * inv{}.make(4*INVCAP).d; // 2 FO4 (Amrutur & Horowitz)
     static constexpr f64 XCSA = 0.4; // SA input capacitance relative to bitline capacitance
-    
+
     // assumptions:
     //   * SA offset voltage follows Pelgrom's square-root law (Pileggi, CICC 2008)
     //   * bitline swing proportional to SA offset voltage (Abu-Rahma, CICC 2011)
@@ -2323,7 +2324,9 @@ namespace hcm {
     static_assert(E!=0 && D!=0 && std::has_single_bit(MAXN));
     static constexpr bool ok = true;
 
-    static constexpr auto banking = []<u64 R/*rows*/, u64 W/*row width*/>() {
+    template<u64 R/*rows*/, u64 W/*row width*/>
+    static constexpr std::tuple<u64,u64> banking()
+    {
       constexpr u64 N = MAXN;
       static_assert(R>=N);
       static_assert(W>=MAXM/2);
@@ -2332,7 +2335,7 @@ namespace hcm {
       static_assert(FACTOR>=1);
       if constexpr (R <= W * SRAM_CELL.aspect_ratio * FACTOR) {
 	// single column
-	return std::tuple{1/*BX*/,(R+N-1)/N/*BY*/};
+	return {1/*BX*/,(R+N-1)/N/*BY*/};
       } else {
 	// multiple columns (BY=2^k)
 	// we want squarish shape
@@ -2343,10 +2346,10 @@ namespace hcm {
 	static_assert(BY>=1 && std::has_single_bit(BY));
 	constexpr u64 BX = (R+BY*N-1)/(BY*N);
 	static_assert(BX>=1);
-	return std::tuple{BX,BY};
+	return {BX,BY};
       }
-    };
-    
+    }
+
     static constexpr auto params = []() {
       if constexpr (D > MAXM) {
 	// data width = bank width
@@ -2356,7 +2359,7 @@ namespace hcm {
 	  return std::tuple{1/*BX*/,1/*BY*/,E/*N*/,M};
 	} else {
 	  // multiple banks (N=MAXN)
-	  auto [BX,BY] = banking.template operator()<E,D>();
+	  auto [BX,BY] = banking<E,D>();
 	  return std::tuple{BX,BY,MAXN,M};
 	}
       } else {
@@ -2377,7 +2380,7 @@ namespace hcm {
 	  // multiple banks (N=MAXN)
 	  constexpr u64 M = MAXK * D;
 	  constexpr u64 EK = (E+MAXK-1) / MAXK;
-	  auto [BX,BY] = banking.template operator()<EK,M>();
+	  auto [BX,BY] = banking<EK,M>();
 	  return std::tuple{BX,BY,MAXN,M};
 	}
       }

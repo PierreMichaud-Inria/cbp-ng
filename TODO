@@ -4,6 +4,6 @@
 
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
 
-* wire segmentation prioritizes delay over energy, is this ok?
+* wire segmentation prioritizes delay over energy, is this what we want?
 
 * leakage is suspiciously low
