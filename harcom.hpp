@@ -2030,8 +2030,7 @@ namespace hcm {
     
     // TODO: precharge circuit
     // TODO: double wordline, flying bitline (Chang, IEEE JSSC, jan 2021)
-    // assume single-fin transistors (Chang, IEEE JSSC, jan 2021) ==> need write assist (TODO)
-    
+
     static constexpr f64 WLCAP_fF = SRAM_CELL.wordline_capacitance;
     static constexpr f64 WLCAP = WLCAP_fF / CGATE_fF;
     static constexpr f64 WLCAP_pF = WLCAP * CGATE_pF;
@@ -2052,10 +2051,7 @@ namespace hcm {
     static constexpr f64 SADELAY = 2 * inv{}.make(4*INVCAP).d; // 2 FO4 (Amrutur & Horowitz)
     static constexpr f64 XCSA = 0.4; // SA input capacitance relative to bitline capacitance
 
-    // assumptions:
-    //   * SA offset voltage follows Pelgrom's square-root law (Pileggi, CICC 2008)
-    //   * bitline swing proportional to SA offset voltage (Abu-Rahma, CICC 2011)
-    // ==> bitline swing inversely proportional to sqrt of SA input capacitance Csa (Kim, IEEE JSSC april 2023)
+    // assumption: SA offset voltage (and bitline swing) inversely proportional to sqrt of SA input capacitance Csa (Kim, IEEE JSSC april 2023)
     static constexpr f64 SACAP = std::max(SACAPMIN,std::min(SACAPMAX,N*BLCAP*XCSA)); // sense amp capacitance relative to CGATE
     static constexpr f64 SACAP_pF = SACAP * CGATE_pF;
     static constexpr f64 SASCALE = SACAP/SACAPMIN;
@@ -2066,22 +2062,25 @@ namespace hcm {
     // drive wordline from the mid point (Amrutur & Horowitz)
     static constexpr f64 WLRC = wire_res_delay((M/2)*WLRES, (M/2)*WLCAP_pF);
 
+    // BLRC is minimized when XCSA = 1
+    // however, if Csa=Cbl, SA consumes more energy than bitline
+    // sqrt(x)+1/sqrt(x) is ~10% above min delay at x = Csa/Cbl = 0.4
     static constexpr f64 BLRC = []() { // bitline RC delay (ps)
       // https://files.inria.fr/pacap/michaud/rc_delay.pdf
-      // V = Vdd - (Idsat/2) * (t-t0) / (Cbl+Csa)
+      // V = Vdd - Idsat * (t-t0) / (Cbl+Csa)
       // t0 = Rbl*Cbl*(Cbl+3Csa)/(6Cbl+6Csa)
       f64 CBL = N * BLCAP_pF; // fF
       f64 RBL = N * BLRES; // Ohm
-      f64 T0 = RBL * CBL * (CBL+3*SACAP_pF) / (6*(CBL+SACAP_pF)); // ps
+      f64 T0 = RBL * CBL * (CBL+3*SACAP_pF) / (6*(CBL+SACAP_pF)); // ps      
       return T0;     
     } ();
 
     static constexpr f64 BLDELAY = []() { // bitline total delay (ps)
       // model cell drive as current source (Amrutur & Horowitz)
+      // assume current is Idsat
       // neglect resistance of sense-amp isolation transistor
-      // assume current is approximately Idsat/2 (2 nMOS in series)
       f64 CBL = N * BLCAP_pF; // fF
-      return BLRC + (CBL+SACAP_pF) * BLSWING / (IDSAT_SRAM/2);
+      return BLRC + (CBL+SACAP_pF) * BLSWING / IDSAT_SRAM;
     } ();
 
     // gates layout in peripheric logic is constrained by the wordline/bitline pitch
@@ -2093,7 +2092,6 @@ namespace hcm {
 
     // TODO: SA inverters are skewed
     // TODO: SA footer transistor (big capacitance)
-    // one SA per column ==> assume SA does not impact column pitch (TODO?)
     static constexpr circuit SA = inv{}.make(SACAP,SASCALE) * 2 * M; // sense amplifiers
     
     // column read MUX (if D<M) after SA (wire capacitances not modeled, TODO)

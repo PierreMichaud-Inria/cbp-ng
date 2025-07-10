@@ -6,4 +6,6 @@
 
 * wire segmentation prioritizes delay over energy, is this what we want?
 
+* SRAM: should we model 4:1 column multiplexing before the sense amp?
+
 * leakage is suspiciously low
