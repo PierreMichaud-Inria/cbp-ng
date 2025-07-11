@@ -2043,7 +2043,7 @@ namespace hcm {
     // sense amplifier (SA) = latch type (cross coupled inverters)
     // SAVBLMIN value taken from Amrutur & Horowitz, IEEE JSSC, feb. 2000
     // TODO: SACAPMAX is currently a random number
-    static constexpr f64 SACAPMAX = 30*INVCAP; // maximum SA input capacitance relative to CGATE
+    static constexpr f64 SACAPMAX = 20*INVCAP; // maximum SA input capacitance relative to CGATE
     static constexpr f64 SACAPMIN = INVCAP * (1+PINV); // minimum SA input capacitance relative to CGATE
     static_assert(SACAPMIN<=SACAPMAX);
     static constexpr f64 SAVBLMIN = 0.1; // minimum bitline voltage swing (V)
@@ -2276,18 +2276,18 @@ namespace hcm {
       // bank access starts after bank select signal has been broadcast
       return ACC + (RTREE[0] || (bankread + RTREE[1]));
     }();
-    
+
     static void print2(std::string s = "", std::ostream & os = std::cout)
     {
-      ATREE.print("ATREE: ",os);
-      SEL.print("SEL: ",os);
-      RTREE[0].print("RTREE select: ",os);
-      RTREE[1].print("RTREE data: ",os);
-      WTREE.print("WTREE: ",os);
-      BANK::print("NODE: ",os);
-      //BANK::print2("",os);
+      ATREE.print(s+"ATREE: ",os);
+      SEL.print(s+"SEL: ",os);
+      RTREE[0].print(s+"RTREE select: ",os);
+      RTREE[1].print(s+"RTREE data: ",os);
+      WTREE.print(s+"WTREE: ",os);
+      BANK::print(s+"NODE: ",os);
+      //BANK::print2(s,os);
     }
-    
+
     static constexpr u64 num_bits() {return NB * BANK::NBITS;}
     static constexpr f64 read_latency() {return READ.d;}
     static constexpr f64 read_energy() {return READ.e;}
@@ -2447,13 +2447,13 @@ namespace hcm {
   using sram =sram_bestN<E,D,64,128,256,512,1024>;
 
   template<u64 E, u64 D0, u64 S, u64 ...I>
-  void test_sram_D(std::integer_sequence<u64,I...> seq)
+  void test_sram_D(std::integer_sequence<u64,I...>)
   {
     (sram<E,D0+I*S>::print("D="+std::to_string(D0+I*S)+": "),...);
   }
 
   template<u64 D, u64 E0, f64 X, u64 ...I>
-  void test_sram_E(std::integer_sequence<u64,I...> seq)
+  void test_sram_E(std::integer_sequence<u64,I...>)
   {
     (sram<llround(E0*pow(X,I)),D>::print("E="+std::to_string(llround(E0*pow(X,I)))+": "),...);
   }  
