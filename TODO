@@ -1,5 +1,7 @@
 * manual
 
+* compiler flag to deactivate transistor and energy counting
+
 * is there a SRAM cost function that makes the SRAM behavior monotonic?
 
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
@@ -8,4 +10,7 @@
 
 * SRAM should model column multiplexing before sensing
 
-* leakage is suspiciously low
+* leakage depends on total number of transistor fins
+
+* leakage depends on temperature
+

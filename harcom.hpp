@@ -1001,8 +1001,8 @@ namespace hcm {
     f64 bias[2] = {1./pno[0], 1./pno[1]}; // one output activated per predecoder
     circuit g = anding<SE,SMAX>(2,co,1,(bias[0]+bias[1])/2);
     f64 h = pitch * (no-1); // decoder height (um)
-    circuit pdwire[2] = {wire<SE,SMAX>(h/2,false,g.ci*(pno[1]/2),true,bias[0]) | wire<SE,SMAX>(h/2,false,g.ci*(pno[1]-pno[1]/2),true,bias[0]), wire<SE,SMAX>(h/2,false,g.ci*(pno[0]/2),true,bias[1]) | wire<SE,SMAX>(h/2,false,g.ci*(pno[0]-pno[0]/2),true,bias[1])};
-    circuit pdec[2] = {decode1<SE,SMAX>(pno[0],pdwire[0].ci), decode1<SE,SMAX>(pno[1],pdwire[1].ci)};
+    circuit pdwire[2] = {wire(h/2,false,g.ci*(pno[1]/2),true,bias[0]) | wire(h/2,false,g.ci*(pno[1]-pno[1]/2),true,bias[0]), wire(h/2,false,g.ci*(pno[0]/2),true,bias[1]) | wire(h/2,false,g.ci*(pno[0]-pno[0]/2),true,bias[1])};
+    circuit pdec[2] = {decode1(pno[0],pdwire[0].ci), decode1(pno[1],pdwire[1].ci)};
     return ((pdec[0]+(pdwire[0]*pno[0])) || (pdec[1]+(pdwire[1]*pno[1]))) + g * no;
   }
 
@@ -1021,8 +1021,8 @@ namespace hcm {
     f64 bias[2] = {1./pno[0], 1./pno[1]}; // one output activated per predecoder
     circuit g = anding<SE,SMAX>(2,co,1,(bias[0]+bias[1])/2);
     f64 h = pitch * (no*rep-1); // decoder height (um)
-    circuit pdwire[2] = {wire<SE,SMAX>(h/2,false,g.ci*(pno[1]/2)*rep,true,bias[0]) | wire<SE,SMAX>(h/2,false,g.ci*(pno[1]-pno[1]/2)*rep,true,bias[0]), wire<SE,SMAX>(h/2,false,g.ci*(pno[0]/2)*rep,true,bias[1]) | wire<SE,SMAX>(h/2,false,g.ci*(pno[0]-pno[0]/2)*rep,true,bias[1])};
-    circuit pdec[2] = {decode1<SE,SMAX>(pno[0],pdwire[0].ci), decode1<SE,SMAX>(pno[1],pdwire[1].ci)};
+    circuit pdwire[2] = {wire(h/2,false,g.ci*(pno[1]/2)*rep,true,bias[0]) | wire(h/2,false,g.ci*(pno[1]-pno[1]/2)*rep,true,bias[0]), wire(h/2,false,g.ci*(pno[0]/2)*rep,true,bias[1]) | wire(h/2,false,g.ci*(pno[0]-pno[0]/2)*rep,true,bias[1])};
+    circuit pdec[2] = {decode1(pno[0],pdwire[0].ci), decode1(pno[1],pdwire[1].ci)};
     return ((pdec[0]+(pdwire[0]*pno[0])) || (pdec[1]+(pdwire[1]*pno[1]))) + g * (no*rep);
   }
 
@@ -2087,7 +2087,7 @@ namespace hcm {
     // not sure to what extent this limits the gate size (TODO?)
     static constexpr u64 SMAX = 40;
     static constexpr f64 SEFF = 12;
-    
+
     static constexpr circuit RDEC = decode2<SEFF,SMAX>(N,M*WLCAP,SRAM_CELL.bitline_length); // row decoder
 
     // TODO: SA inverters are skewed
