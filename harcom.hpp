@@ -2039,6 +2039,7 @@ namespace hcm {
     static constexpr f64 BLCAP_pF = BLCAP * CGATE_pF;
     static constexpr f64 WLRES = SRAM_CELL.wordline_resistance; // Ohm
     static constexpr f64 BLRES = SRAM_CELL.bitline_resistance; // Ohm
+    static constexpr f64 WWCAP = SRAM_CELL.wordline_length * METALCAP;
 
     // sense amplifier (SA) = latch type (cross coupled inverters)
     // SAVBLMIN value taken from Amrutur & Horowitz, IEEE JSSC, feb. 2000
@@ -2085,21 +2086,23 @@ namespace hcm {
 
     // gates layout in peripheric logic is constrained by the wordline/bitline pitch
     // not sure to what extent this limits the gate size (TODO?)
-    static constexpr u64 SMAX = 40;
-    static constexpr f64 SEFF = 12;
+    static constexpr u64 SX = 20; // maximum inverter scale at bitline pitch
+    static constexpr u64 SY = 10; // maximum inverter scale at wordline pitch
+    static constexpr f64 SEFF = 4;
 
-    static constexpr circuit RDEC = decode2<SEFF,SMAX>(N,M*WLCAP,SRAM_CELL.bitline_length); // row decoder
-
+    static constexpr circuit RDEC = decode2<SEFF,SY>(N,M*WLCAP,SRAM_CELL.bitline_length); // row decoder
+    
     // TODO: SA inverters are skewed
     // TODO: SA footer transistor (big capacitance)
     static constexpr circuit SA = inv{}.make(SACAP,SASCALE) * 2 * M; // sense amplifiers
-    
+
     // column read MUX (if D<M) after SA (wire capacitances not modeled, TODO)
-    static constexpr auto CMUX = (D<M)? mux<SEFF,SMAX>(M/D,D,INVCAP) : std::array<circuit,2>{};
+    static constexpr auto CMUX = (D<M)? mux<SEFF,SX>(M/D,D,INVCAP) : std::array<circuit,2>{};
 
     static constexpr auto WDR = []() { // write driver
+      // TODO(?): MY wires resistance delay
       std::array<circuit,2> wdr;
-      circuit BLBUF = buffer<SEFF,SMAX>(N*BLCAP,false) | buffer<SEFF,SMAX>(N*BLCAP,true);
+      circuit BLBUF = buffer<SEFF,SX>(N*BLCAP,false) | buffer<SEFF,SX>(N*BLCAP,true);
       // assume last inverter of buffer is tristate (impact on delay not modeled, TODO)
       if constexpr (D<M) {
 	// data bits are interleaved
@@ -2109,26 +2112,26 @@ namespace hcm {
 	f64 CTRI = 2 * N*BLCAP * TAU_ps / BLBUF.d; // input cap of tristate select (FIXME)
 	if constexpr (DEMUX <= 16) {
 	  // decode outputs run parallel to wordlines
-	  f64 CSEL = CTRI*D + WLCAP*M;
-	  circuit BUFTRI = buffer<SEFF>(CSEL,false) | buffer<SEFF>(CSEL,true);
-	  circuit CDEC = decode2<SEFF>(DEMUX,BUFTRI.ci);
+	  f64 CSEL = CTRI*D + WWCAP*M;
+	  circuit BUFTRI = buffer(CSEL,false) | buffer(CSEL,true);
+	  circuit CDEC = decode2(DEMUX,BUFTRI.ci);
 	  wdr[0] = CDEC + BUFTRI * DEMUX;
-	  wdr[0].e += energy_fJ(WLCAP*M*CGATE_fF,VDD); // two wires switch (worst case)
+	  wdr[0].e += energy_fJ(WWCAP*M*CGATE_fF,VDD); // two wires switch (worst case)
 	} else {
 	  // predecode outputs run parallel to wordlines, AND2 gates are replicated (D replicas)
 	  circuit BUFTRI = buffer<SEFF>(CTRI,false) | buffer<SEFF>(CTRI,true);
-	  circuit CDEC = decode2_rep<SEFF>(DEMUX, BUFTRI.ci, SRAM_CELL.wordline_length, D);
+	  circuit CDEC = decode2_rep(DEMUX, BUFTRI.ci, SRAM_CELL.wordline_length, D);
 	  wdr[0] = CDEC + BUFTRI * M;
 	}
-	wdr[1] = buffer<SEFF>((BLBUF.ci+WLCAP)*DEMUX,false);
-	wdr[1].e += 0.5 * energy_fJ(WLCAP*DEMUX*CGATE_fF,VDD) * 0.5/*switch proba*/;
+	wdr[1] = buffer((BLBUF.ci+WWCAP)*DEMUX,false);
+	wdr[1].e += 0.5 * energy_fJ(WWCAP*DEMUX*CGATE_fF,VDD) * 0.5/*switch proba*/;
       }
       wdr[1] = wdr[1] * D + BLBUF * M;
       return wdr;
     } ();
 
     static constexpr f64 COLSELCAP = CMUX[0].ci + WDR[0].ci;
-    static constexpr circuit ABUS = (buffer<SEFF,SMAX>(RDEC.ci,false) * std::bit_width(N-1)) || (buffer<SEFF,SMAX>(COLSELCAP,false) * std::bit_width(M/D-1));   
+    static constexpr circuit ABUS = (buffer(RDEC.ci,false) * std::bit_width(N-1)) || (buffer(COLSELCAP,false) * std::bit_width(M/D-1));   
     static constexpr const circuit &WBUS = WDR[1];
     static constexpr circuit WLSEL = ABUS + RDEC;
 
