@@ -457,7 +457,7 @@ namespace hcm {
   inline constexpr f64 INVCAP = 1+GAMMA; // input capacitance of single-fin inverter relative to CGATE
   inline constexpr f64 TAU_ps = CGATE_pF * REFF; // intrinsic delay (ps)
 
-  inline constexpr f64 RANDOM_LOGIC_DENSITY = 0.25 * SRAM_CELL.density;
+  inline constexpr f64 RANDOM_LOGIC_DENSITY = 0.5 * SRAM_CELL.density;
   
   // Currently, we assume single-fin transistors everywhere (except for large fanout).
   // TODO: it would be more realistic to assume 2-fin transistors (except in SRAM cell).
@@ -703,6 +703,24 @@ namespace hcm {
   using xnor_cpl = xor_cpl; // a,~a,b,~b ==> ~(a^b) = (~a)^b
 
   template<f64 STAGE_EFFORT=DSE>
+  constexpr u64 num_stages_inv(f64 path_effort, bool odd=false)
+  {
+    // higher stage effort increases delay but reduces energy
+    assert(path_effort>=1);
+    auto delay = [=] (u64 ninv) {
+      return (ninv+1) * (PINV+pow(path_effort,1./(ninv+1)));
+    };
+    i64 n = std::max(1.,ceil(log(path_effort) / log(STAGE_EFFORT))) - 1;
+    assert(n>=0);
+    n += (n & 1) ^ odd;
+    u64 nn = n;
+    while (nn>=2 && delay(nn-2)<=delay(n)*1.05) {
+      nn -= 2;
+    }
+    return nn;
+  }
+
+  template<f64 STAGE_EFFORT=DSE>
   constexpr u64 num_stages(f64 path_effort, bool odd=false)
   {
     // higher stage effort increases delay but reduces energy
@@ -716,17 +734,22 @@ namespace hcm {
   template<f64 SE=DSE, u64 SMAX=DSMAX>
   constexpr circuit buffer(f64 co, bool cpl, f64 scale=1, f64 bias=0.5)
   {
-    f64 ci = inv{}.icap(scale);
-    f64 fo = std::min(std::max(1.,co/ci),f64(SMAX));
-    u64 ninv = num_stages<SE>(fo,cpl);
+    assert(scale==1);
+    f64 fo = std::max(1.,co/inv{}.icap());
+    u64 ninv = num_stages_inv<SE>(fo,cpl);
+    f64 beta = pow(fo,1./(ninv+1));
+    assert(beta>0);
+    if (fo/beta > SMAX) {
+      circuit last = inv{}.make(co,SMAX,bias);
+      return buffer<4.,SMAX>(last.ci,cpl^1,scale,bias) + last;
+    }
     circuit buf;
     if (ninv!=0) {
-      f64 foi = pow(fo,1./ninv);
-      assert(foi>=1);
+      assert(beta>=1);
       for (u64 i=0; i<ninv; i++) {
-	ci *= foi;
+	scale *= beta;
+	f64 ci = inv{}.icap(scale) * beta;
 	buf = buf + inv{}.make((i==(ninv-1))? co:ci,scale,bias);
-	scale *= foi;
       }
     }
     if (buf.nogate()) buf.ci = co;
@@ -813,6 +836,7 @@ namespace hcm {
   constexpr circuit nand_nor_tree(u64 n, bool nandfirst, bool cpl, f64 co, f64 scale=1, f64 bias=0.5)
   {
     // alternate NANDs and NORs
+    assert(scale==1);
     static_assert(ARITY >= 2);
     if (n==0) return {};
     if (n==1) return (cpl)? inv{}.make(co,scale,bias) : circuit{};
@@ -865,7 +889,7 @@ namespace hcm {
     bool nand_stage = nandfirst;
     u64 width = populate_gates(nand_stage,n);
     f64 ci = gate[nand_stage][width].icap(scale);
-    f64 fanout = std::min(co/ci,f64(SMAX));
+    f64 fanout = co/ci;
     u64 path_effort = std::max(1.,path_logical_effort(n)*fanout);
     u64 depth_target = num_stages<SE>(path_effort);
     u64 depth = llround(ceil(log(n)/log(ARITY)));
@@ -881,6 +905,11 @@ namespace hcm {
     ninv += extra_inv;
     assert(depth!=0);
     f64 stage_effort = pow(path_effort,1./depth);
+
+    if (path_effort/stage_effort > SMAX) {
+      circuit last = inv{}.make(co,SMAX,bias);
+      return nand_nor_tree<4.,SMAX>(n,nandfirst,cpl^1,last.ci,scale,bias) + last;
+    }
 
     // build the tree
     circuit tree;
@@ -1981,7 +2010,7 @@ namespace hcm {
     static constexpr f64 HEIGHT = T::array_height(); // um
     // the following cost function is arbitrary (prioritizes latency over energy and reads over writes)
     static constexpr f64 COST = (10*EREAD+EWRITE) * pow(LATENCY,3);
-
+    
     static void print(std::string s = "", std::ostream & os = std::cout)
     {
       os << s;
@@ -2086,7 +2115,7 @@ namespace hcm {
 
     // gates layout in peripheric logic is constrained by the wordline/bitline pitch
     // not sure to what extent this limits the gate size (TODO?)
-    static constexpr u64 SX = 20; // maximum inverter scale at bitline pitch
+    static constexpr u64 SX = 10; // maximum inverter scale at bitline pitch
     static constexpr u64 SY = 10; // maximum inverter scale at wordline pitch
     static constexpr f64 SEFF = 4;
 
