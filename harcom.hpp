@@ -403,8 +403,9 @@ namespace hcm {
   // (Cd+2Cw)/(Cd+Cw) = 65/50 ==> Cd/Cw = 0.7/0.3 = 2.33
   inline constexpr struct {
     u64 transistors = 6; // single RW port
+    u64 fins = transistors; // single-fin transistors (high density cell)
     f64 area = 0.02; // um^2
-    f64 density = transistors / area;
+    f64 density = fins / area;
     f64 aspect_ratio = 2; // wordline longer than bitline
     f64 drain_blwire_cap_ratio = 2.33;
     f64 bitline_length = sqrt(area/aspect_ratio); // um
@@ -457,8 +458,6 @@ namespace hcm {
   inline constexpr f64 INVCAP = 1+GAMMA; // input capacitance of single-fin inverter relative to CGATE
   inline constexpr f64 TAU_ps = CGATE_pF * REFF; // intrinsic delay (ps)
 
-  inline constexpr f64 RANDOM_LOGIC_DENSITY = 0.5 * SRAM_CELL.density;
-  
   // Currently, we assume single-fin transistors everywhere (except for large fanout).
   // TODO: it would be more realistic to assume 2-fin transistors (except in SRAM cell).
   // As we do not model the effect of interconnects on gates delay, this does not matter for delay,
@@ -507,15 +506,17 @@ namespace hcm {
     f64 cg = 0; // total gate capacitance (all transistors) relative to CGATE
     f64 e = 0; // energy (fJ)
     f64 w = 0; // total wiring (um)
+    u64 f = 0; // fins
 
-    constexpr circuit() : t(0), d(0), ci(0), cg(0), e(0), w(0) {}
+    constexpr circuit() : t(0), d(0), ci(0), cg(0), e(0), w(0), f(0) {}
     
-    constexpr circuit(u64 t, f64 d, f64 ci, f64 cg, f64 bias) : t(t), d(d), ci(ci), cg(cg), e(gate_energy(bias)), w(0)
+    constexpr circuit(u64 t, f64 d, f64 ci, f64 cg, u64 f, f64 bias) : t(t), d(d), ci(ci), cg(cg), e(gate_energy(bias)), w(0), f(f)
     {
       assert(t!=0);
       assert(d>0);
       assert(ci>0);
       assert(cg>0);
+      assert(f!=0);
       assert(e>=0);
     }
 
@@ -560,6 +561,7 @@ namespace hcm {
       chain.d = d + x.d;
       chain.ci = (ci==0)? x.ci : ci;
       chain.cg = cg + x.cg;
+      chain.f = f + x.f;
       chain.e = e + x.e;
       chain.w = w + x.w;
       return chain;
@@ -574,6 +576,7 @@ namespace hcm {
       rep.d = d;
       rep.ci = ci;
       rep.cg = cg * n;
+      rep.f = f * n;
       rep.e = e * n;
       rep.w = w * n;
       return rep;
@@ -587,6 +590,7 @@ namespace hcm {
       para.d = std::max(d,x.d);
       para.ci = std::max(ci,x.ci);
       para.cg = cg + x.cg;
+      para.f = f + x.f;
       para.e = e + x.e;
       para.w = w + x.w;
       return para;
@@ -600,11 +604,13 @@ namespace hcm {
       para.d = std::max(d,x.d);
       para.ci = ci + x.ci;
       para.cg = cg + x.cg;
+      para.f = f + x.f;
       para.e = e + x.e;
       para.w = w + x.w;
       return para;
     }
   };
+
 
   struct basic_gate {
     using cilist = std::initializer_list<f64>;
@@ -615,6 +621,7 @@ namespace hcm {
     f64 cg = 0; // total gate capacitances, relative to CGATE
     u64 nci = 0; // number of input types
     f64 cimax = 0; // maximum input capacitance
+    u64 fins = 0; // number of fins
     
     constexpr void init_ci(cilist l)
     {
@@ -628,7 +635,7 @@ namespace hcm {
 
     constexpr basic_gate() {}
 
-    constexpr basic_gate(u64 tr, cilist cl, f64 p, f64 cg) : tr(tr), cp(p*PINV), cg(cg)
+    constexpr basic_gate(u64 tr, cilist cl, f64 p, f64 cg, u64 f) : tr(tr), cp(p*PINV), cg(cg), fins(f)
     {
       init_ci(cl);
     }
@@ -654,7 +661,7 @@ namespace hcm {
       assert(bias>=0 && bias<=1);
       assert(co>=0);
       f64 delay_ps = (cp + co/scale) * TAU_ps;
-      return {tr, delay_ps, cimax*scale, cg*scale, bias};
+      return {tr, delay_ps, cimax*scale, cg*scale, u64(fins*scale), bias};
     }
   };
 
@@ -665,31 +672,31 @@ namespace hcm {
   // Chinazzo et al., ICECS 2022, "Investigation of pass transistor logic in a 12nm FinFET CMOS technology"
 
   struct inv : basic_gate { // inverter
-    constexpr inv() : basic_gate(2,{INVCAP},INVCAP,INVCAP) {}
+    constexpr inv() : basic_gate(2,{INVCAP},INVCAP,INVCAP,2) {}
   };
 
   struct nand : basic_gate { // single-input NAND is inverter
-    constexpr nand(u64 n) : basic_gate(2*n,{n+GAMMA},n+n*GAMMA,n*(n+GAMMA)) {assert(n>=1);}
+    constexpr nand(u64 n) : basic_gate(2*n,{n+GAMMA},n+n*GAMMA,n*(n+GAMMA),n+n*n) {assert(n>=1);}
   };
 
   struct nor : basic_gate { // single-input NOR is inverter
-    constexpr nor(u64 n) : basic_gate(2*n,{1+n*GAMMA},n+n*GAMMA,n*(1+n*GAMMA)) {assert(n>=1);}
+    constexpr nor(u64 n) : basic_gate(2*n,{1+n*GAMMA},n+n*GAMMA,n*(1+n*GAMMA),n+n*n) {assert(n>=1);}
   };
 
   struct and_nor /*aka AOI21*/: basic_gate { // ~(a+bc)
-    constexpr and_nor() : basic_gate(6,{1+2*GAMMA/*a*/,2+2*GAMMA/*b*/,2+2*GAMMA/*c*/},3+2*GAMMA,5+6*GAMMA) {}
+    constexpr and_nor() : basic_gate(6,{1+2*GAMMA/*a*/,2+2*GAMMA/*b*/,2+2*GAMMA/*c*/},3+2*GAMMA,5+6*GAMMA,11) {}
   };
 
   struct or_nand /*aka OAI21*/: basic_gate { // ~(a(b+c))
-    constexpr or_nand() : basic_gate(6,{2+GAMMA/*a*/,2+2*GAMMA/*b*/,2+2*GAMMA/*c*/},2+3*GAMMA,6+5*GAMMA) {}
+    constexpr or_nand() : basic_gate(6,{2+GAMMA/*a*/,2+2*GAMMA/*b*/,2+2*GAMMA/*c*/},2+3*GAMMA,6+5*GAMMA,11) {}
   };
 
   struct and2_nor /*aka AOI22*/ : basic_gate { // ~(ab+cd)
-    constexpr and2_nor() : basic_gate(8,{INVCAP},4+4*GAMMA,8+8*GAMMA) {}
+    constexpr and2_nor() : basic_gate(8,{INVCAP},4+4*GAMMA,8+8*GAMMA,16) {}
   };
 
   struct mux_inv_tri : basic_gate { // inverting MUX (tristate inverters)
-    constexpr mux_inv_tri(u64 n) : basic_gate(4*n,{2+2*GAMMA/*data*/,2/*sel*/,2*GAMMA/*csel*/},n*(2+2*GAMMA),n*(4+4*GAMMA)) {assert(n>=1);}
+    constexpr mux_inv_tri(u64 n) : basic_gate(4*n,{2+2*GAMMA/*data*/,2/*sel*/,2*GAMMA/*csel*/},n*(2+2*GAMMA),n*(4+4*GAMMA),n*8) {assert(n>=1);}
   };
 
   struct inv_tri : mux_inv_tri { // tristate inverter
@@ -697,7 +704,7 @@ namespace hcm {
   };
 
   struct xor_cpl : basic_gate { // a,~a,b,~b ==> a^b
-    constexpr xor_cpl() : basic_gate(8,{2+2*GAMMA},4+4*GAMMA,8+8*GAMMA) {}
+    constexpr xor_cpl() : basic_gate(8,{2+2*GAMMA},4+4*GAMMA,8+8*GAMMA,16) {}
   };
 
   using xnor_cpl = xor_cpl; // a,~a,b,~b ==> ~(a^b) = (~a)^b
@@ -1981,7 +1988,7 @@ namespace hcm {
     static constexpr circuit clock1 = inv{}.make(inv_tri{}.icap<1>()*4);
 
     static constexpr f64 width = SRAM_CELL.wordline_length * N; // um
-    static constexpr f64 height = SRAM_CELL.bitline_length * (oneflop.t+clock1.t) / SRAM_CELL.transistors; // um
+    static constexpr f64 height = SRAM_CELL.bitline_length * (oneflop.f+clock1.f) / SRAM_CELL.fins; // um
 
     static constexpr circuit clocking = []() {
       f64 phicap2 = inv_tri{}.icap<2>() * 4;
@@ -1990,6 +1997,7 @@ namespace hcm {
     } ();
 
     static constexpr u64 xtors = flops.t + clocking.t;
+    static constexpr u64 fins = flops.f + clocking.f;
 
     // clocking.e corresponds to a transition probability of 0.5
     // actually, the clock transitions with probability 1 twice per write
@@ -2003,6 +2011,7 @@ namespace hcm {
   struct sram_common {
     static constexpr u64 NBITS = T::num_bits();
     static constexpr u64 XTORS = T::num_xtors();
+    static constexpr u64 FINS = T::num_fins();
     static constexpr f64 LATENCY = T::read_latency(); // ps
     static constexpr f64 EREAD = T::read_energy(); // fJ
     static constexpr f64 EWRITE = T::write_energy(); // fJ
@@ -2029,6 +2038,7 @@ namespace hcm {
   struct sram_null {
     static constexpr u64 num_bits() {return 0;}
     static constexpr u64 num_xtors() {return 0;}
+    static constexpr u64 num_fins() {return 0;}
     static constexpr f64 read_latency() { return 0;}
     static constexpr f64 read_energy() {return 0;}
     static constexpr f64 write_energy() {return 0;}
@@ -2069,6 +2079,7 @@ namespace hcm {
     static constexpr f64 WLRES = SRAM_CELL.wordline_resistance; // Ohm
     static constexpr f64 BLRES = SRAM_CELL.bitline_resistance; // Ohm
     static constexpr f64 WWCAP = SRAM_CELL.wordline_length * METALCAP;
+    static constexpr f64 PERI_LOGIC_DENSITY = 0.5 * SRAM_CELL.density;
 
     // sense amplifier (SA) = latch type (cross coupled inverters)
     // SAVBLMIN value taken from Amrutur & Horowitz, IEEE JSSC, feb. 2000
@@ -2172,10 +2183,11 @@ namespace hcm {
     static constexpr f64 EBLW = D * energy_fJ(N*BLCAP_fF,VDD); // bitline write + precharge
 
     static constexpr u64 CELL_XTORS = SRAM_CELL.transistors * N * M;
+    static constexpr u64 CELL_FINS = SRAM_CELL.fins * N * M;
     static constexpr u64 PERI_XTORS = WLSEL.t + SA.t + WDR[0].t + WDR[1].t + CMUX[0].t + CMUX[1].t;
-    static constexpr f64 PERI_GATECAP = WLSEL.cg + SA.cg + WDR[0].cg + WDR[1].cg + CMUX[0].cg + CMUX[1].cg;
+    static constexpr u64 PERI_FINS = WLSEL.f + SA.f + WDR[0].f + WDR[1].f + CMUX[0].f + CMUX[1].f;
     static constexpr f64 CELLS_AREA = SRAM_CELL.area * N * M; // um^2
-    static constexpr f64 PERI_AREA = PERI_GATECAP / RANDOM_LOGIC_DENSITY; // um^2
+    static constexpr f64 PERI_AREA = f64(PERI_FINS) / PERI_LOGIC_DENSITY; // um^2
     static constexpr f64 AREA = CELLS_AREA + PERI_AREA; // um^2
     static constexpr f64 CELLS_WIDTH = SRAM_CELL.wordline_length * M; // um
     static constexpr f64 CELLS_HEIGHT = SRAM_CELL.bitline_length * N; // um
@@ -2186,6 +2198,7 @@ namespace hcm {
     static constexpr f64 array_width() {return sqrt(AREA*ASPECT_RATIO);} // um
     static constexpr f64 array_height() {return sqrt(AREA/ASPECT_RATIO);} // um
     static constexpr u64 num_xtors() {return CELL_XTORS + PERI_XTORS;}
+    static constexpr u64 num_fins() {return CELL_FINS + PERI_FINS;}
 
     static constexpr f64 read_latency()
     {
@@ -2259,6 +2272,7 @@ namespace hcm {
     static constexpr f64 array_width() {return BANK::WIDTH * NB + BANKR::WIDTH;}
     static constexpr f64 array_height() {return BANK::HEIGHT;}
     static constexpr u64 num_xtors() {return BANK::XTORS * NB + BANKR::XTORS + ABUS.t;}
+    static constexpr u64 num_fins() {return BANK::FINS * NB + BANKR::FINS + ABUS.f;}
 
     static void print2(std::string s = "", std::ostream & os = std::cout)
     {
@@ -2331,6 +2345,11 @@ namespace hcm {
     {
       return NB * BANK::XTORS + ACC.t + WTREE.t + RTREE[0].t + RTREE[1].t;
     }
+
+    static constexpr u64 num_fins()
+    {
+      return NB * BANK::FINS + ACC.f + WTREE.f + RTREE[0].f + RTREE[1].f;
+    }    
   };
 
 
@@ -2437,6 +2456,7 @@ namespace hcm {
 
     static constexpr u64 num_bits() {return ARR::NBITS;}
     static constexpr u64 num_xtors() {return ARR::XTORS;}
+    static constexpr u64 num_fins() {return ARR::FINS;}
     static constexpr f64 read_latency() {return ARR::LATENCY;}
     static constexpr f64 read_energy() {return ARR::EREAD;}
     static constexpr f64 write_energy() {return ARR::EWRITE;}
@@ -2760,11 +2780,11 @@ namespace hcm {
     global<u64> storage;
     global<u64> storage_sram;
     global<f64> energy_fJ;
-    global<u64> storage_xtors;
-    global<u64> logic_xtors[2];
+    global<u64> transistors;
+    global<u64> xtor_fins;
 
   private:
-    global<bool> storage_destroyed = false;
+    bool storage_destroyed = false;
 
     void next_cycle()
     {
@@ -2773,17 +2793,12 @@ namespace hcm {
 	std::terminate();
       }
       cycle++;
-      logic_xtors[1] = logic_xtors[0];
-      logic_xtors[0] = 0;
     }
 
-    void update_xtors(u64 xtors, bool init)
+    void update_xtors(u64 xtors, u64 fins)
     {
-      if (init) {
-	storage_xtors += xtors;
-      } else {
-	logic_xtors[0] += xtors;
-      }
+      transistors += xtors;
+      xtor_fins += fins;
     }
 
     void update_storage(u64 nbits, bool is_sram)
@@ -2799,16 +2814,13 @@ namespace hcm {
 
     void update_logic(const circuit &c)
     {
-      update_xtors(c.t,false);
+      if (cycle == first_cycle)
+	update_xtors(c.t,c.f);
       update_energy(c.e);
     }
 
   public:
 
-    u64 total_xtors()
-    {
-      return storage_xtors + logic_xtors[cycle!=first_cycle];
-    }
 
     f64 dyn_power_mW()
     {
@@ -2819,13 +2831,11 @@ namespace hcm {
 
     f64 sta_power_mW()
     {
-      // FIXME: not all transistors are single fin
-      u64 xtors = total_xtors();
-      u64 xtors_sram = storage_sram * SRAM_CELL.transistors;
-      assert(xtors >= xtors_sram);
-      u64 xtors_logic = xtors - xtors_sram;
+      u64 fins_sram = storage_sram * SRAM_CELL.fins;
+      assert(xtor_fins >= fins_sram);
+      u64 fins_logic = xtor_fins - fins_sram;
       // FIXME: this is a very rough model (e.g., ignores stacking and temperature)
-      return ((xtors_sram/2) * IOFF_SRAM + (xtors_logic/2) * IOFF) * VDD * 1e3; // mW
+      return ((fins_sram/2) * IOFF_SRAM + (fins_logic/2) * IOFF) * VDD * 1e3; // mW
     }
 
     void print(std::ostream & os = std::cout)
@@ -2836,7 +2846,9 @@ namespace hcm {
 	os << "clock frequency (GHz): " << 1000./clock_cycle_ps << std::endl;
       }
       storage.print("storage (bits): ",os);
-      os << "transistors: " << total_xtors() << std::endl;
+      os << "transistors: " << transistors << std::endl;
+      if (transistors!=0)
+	os << "fins/transistor: " << f64(xtor_fins) / transistors << std::endl;
       if (cycle == first_cycle) {
 	energy_fJ.print("dynamic energy (fJ): ",os);	
       } else if (clock_cycle_ps != 0) {
@@ -3467,7 +3479,7 @@ namespace hcm {
 	std::terminate();
       }
       panel.update_storage(N,false);
-      panel.update_xtors(stg::xtors,true);
+      panel.update_xtors(stg::xtors,stg::fins);
     }
 
   public:
@@ -4256,7 +4268,7 @@ namespace hcm {
     ram()
     {
       panel.update_storage(static_ram::NBITS,true);
-      panel.update_xtors(static_ram::XTORS,true);
+      panel.update_xtors(static_ram::XTORS,static_ram::FINS);
     }
 
     ~ram()

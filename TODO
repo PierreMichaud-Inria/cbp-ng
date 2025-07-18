@@ -16,6 +16,4 @@
 
 * SRAM cost function should take into account write latency (impacts energy)
 
-* leakage depends on total number of transistor fins
-
 * leakage depends on temperature
