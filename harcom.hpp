@@ -2018,8 +2018,8 @@ namespace hcm {
     static constexpr f64 WIDTH = T::array_width(); // um
     static constexpr f64 HEIGHT = T::array_height(); // um
     // the following cost function is arbitrary (prioritizes latency over energy and reads over writes)
-    static constexpr f64 COST = (10*EREAD+EWRITE) * pow(LATENCY,3);
-    
+    static constexpr f64 COST = (2*EREAD+EWRITE) * pow(LATENCY,3);
+
     static void print(std::string s = "", std::ostream & os = std::cout)
     {
       os << s;
@@ -2496,7 +2496,7 @@ namespace hcm {
   using sram_bestN = best_config<sram_bestM<E,D,N,64,128,256,512>...>::type;
   
   template<u64 E, u64 D>
-  using sram =sram_bestN<E,D,64,128,256,512,1024>;
+  using sram =sram_bestN<E,D,64,128,256,512>;
 
   template<u64 E, u64 D0, u64 S, u64 ...I>
   void test_sram_D(std::integer_sequence<u64,I...>)
@@ -2814,9 +2814,15 @@ namespace hcm {
 
     void update_logic(const circuit &c)
     {
-      if (cycle == first_cycle)
-	update_xtors(c.t,c.f);
+      if (cycle == first_cycle) update_xtors(c.t,c.f);
       update_energy(c.e);
+    }
+
+    void update_fanout(const circuit &c)
+    {
+      // update energy unconditionally
+      if (cycle == first_cycle) update_xtors(c.t,c.f);
+      energy_fJ += c.e;
     }
 
   public:
@@ -2880,7 +2886,7 @@ namespace hcm {
   private:
     T data = 0;
     u64 timing = 0; // time (picoseconds)
-    u64 read_credit = 0;
+    u64 read_credit = (exec.active)? 0 : std::numeric_limits<u64>::max();
 
     T fit(T x) const requires std::integral<T>
     {
@@ -2919,7 +2925,9 @@ namespace hcm {
 	// delay increment is that of a FO2 inverter (wires not modeled, TODO?)	
 	constexpr circuit fo2inv = inv{}.make(2*INVCAP) * N; // N inverters in parallel
 	static_assert(fo2inv.delay()!=0);
-	panel.update_logic(fo2inv);
+	// if the value is captured by a lambda executed by execute_if,
+	// reading the value costs energy regardless of the predicate
+	panel.update_fanout(fo2inv);
 	set_time(time()+fo2inv.delay());
 #endif // CHECK_FANOUT
       }
@@ -3055,7 +3063,8 @@ namespace hcm {
     {
 #ifndef FREE_FANOUT
       static_assert(FO>=2);
-      // delay logarithmic with fanout (wires not modeled, TODO?)
+      if (FO < read_credit) return;
+      // delay logarithmic with fanout
       panel.update_logic(REP<N,FO>);
       set_time(time()+REP<N,FO>.delay());
       read_credit = FO;
@@ -4289,7 +4298,6 @@ namespace hcm {
 	std::terminate();
       }
       last_write_cycle = panel.cycle;
-      if (! exec.active) return;
       panel.update_energy(static_ram::EWRITE);
       auto [av,at] = proxy::get_vt(std::forward<TYPEA>(address));
       if (is_less(av,0) || is_greater_equal(av,N)) {
@@ -4298,8 +4306,10 @@ namespace hcm {
       }
       auto dv = proxy::get(std::forward<TYPED>(dataval));
       auto dt = proxy::time(dataval);
-      writes.push_back({u64(av),valuetype(dv),std::max(at,dt)});
-      std::push_heap(writes.begin(),writes.end());
+      if (exec.active) {
+	writes.push_back({u64(av),valuetype(dv),std::max(at,dt)});
+	std::push_heap(writes.begin(),writes.end());
+      }
     }
 
     template<ival U>
@@ -4310,7 +4320,6 @@ namespace hcm {
 	std::terminate();
       }
       last_read_cycle = panel.cycle;
-      if (! exec.active) return {};
       panel.update_energy(static_ram::EREAD);
       auto [addr,t] = proxy::get_vt(std::forward<U>(address));
       while (! writes.empty() && writes[0].t <= t) {
@@ -4323,7 +4332,7 @@ namespace hcm {
 	std::cerr << "out-of-bounds RAM read (N=" << N << "; addr=" << addr << ")" << std::endl;
 	std::terminate();
       }
-      T readval = data[addr];
+      T readval = (exec.active)? data[addr] : T{};
       readval.set_time(t);
       return readval;
     }

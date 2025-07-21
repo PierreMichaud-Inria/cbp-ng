@@ -1,19 +1,7 @@
-* manual
-
-* compiler flag to deactivate transistor and energy counting
-
-* concat(array1,array2)
-
-* timing of reg should be rounded to next clock cycle
-
-* is there a SRAM cost function that makes the SRAM behavior monotonic?
-
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
 
-* wire segmentation prioritizes delay over energy, is this what we want?
-
-* SRAM should model column multiplexing before sensing
-
 * SRAM cost function should take into account write latency (impacts energy)
+
+* SRAM should do column multiplexing before sensing
 
 * leakage depends on temperature
