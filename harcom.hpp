@@ -475,6 +475,16 @@ namespace hcm {
   }
 
 
+  constexpr f64 leakage_power_mW(u64 total_fins, u64 sram_cells)
+  {
+    u64 sram_fins = sram_cells * SRAM_CELL.fins;
+    assert(total_fins >= sram_fins);
+    u64 logic_fins = total_fins - sram_fins;
+    // FIXME: this is a very rough model (e.g., ignores stacking and temperature)
+    return ((sram_fins/2) * IOFF_SRAM + (logic_fins/2) * IOFF) * VDD * 1e3; // mW
+  }
+  
+
   constexpr f64 wire_res_delay(f64 res/*Ohm*/, f64 wirecap_pF, f64 loadcap_pF=0)
   {
     // approximate distributed RC line as lumped PI1 circuit (Rao, DAC 1995)
@@ -2017,7 +2027,24 @@ namespace hcm {
     static constexpr f64 EWRITE = T::write_energy(); // fJ
     static constexpr f64 WIDTH = T::array_width(); // um
     static constexpr f64 HEIGHT = T::array_height(); // um
+
+    static constexpr f64 area_um2()
+    {
+      return WIDTH * HEIGHT;
+    }
+
+    static constexpr f64 area_mm2()
+    {
+      return area_um2() / 1000000;
+    }    
+
+    static constexpr f64 leakage_mW()
+    {
+      return leakage_power_mW(FINS,NBITS);
+    }
+
     // the following cost function is arbitrary (prioritizes latency over energy and reads over writes)
+    // ignores write latency and leakage power (TODO?)
     static constexpr f64 COST = (2*EREAD+EWRITE) * pow(LATENCY,3);
 
     static void print(std::string s = "", std::ostream & os = std::cout)
@@ -2029,11 +2056,10 @@ namespace hcm {
       os << " ; ps: " << LATENCY;
       os << " ;  fJ R|W: " << EREAD << "|" << EWRITE;
       os << " ;  um W|H: " << WIDTH << "|" << HEIGHT;
-      //os << " ; area (um^2): " << WIDTH*HEIGHT;
       os << std::endl;
     }
   };
-  
+
 
   struct sram_null {
     static constexpr u64 num_bits() {return 0;}
@@ -2066,7 +2092,7 @@ namespace hcm {
     static_assert(N!=0 && D!=0);
     static_assert(M%D==0);
     static_assert(std::has_single_bit(M/D));
-    
+
     // TODO: precharge circuit
     // TODO: double wordline, flying bitline (Chang, IEEE JSSC, jan 2021)
 
@@ -2079,7 +2105,7 @@ namespace hcm {
     static constexpr f64 WLRES = SRAM_CELL.wordline_resistance; // Ohm
     static constexpr f64 BLRES = SRAM_CELL.bitline_resistance; // Ohm
     static constexpr f64 WWCAP = SRAM_CELL.wordline_length * METALCAP;
-    static constexpr f64 PERI_LOGIC_DENSITY = 0.5 * SRAM_CELL.density;
+    static constexpr f64 PERI_LOGIC_DENSITY = SRAM_CELL.density / 3;
 
     // sense amplifier (SA) = latch type (cross coupled inverters)
     // SAVBLMIN value taken from Amrutur & Horowitz, IEEE JSSC, feb. 2000
@@ -2493,24 +2519,12 @@ namespace hcm {
   using sram_bestM = best_config<sram_banked<E,D,N,M>...>::type;
 
   template<u64 E, u64 D, u64 ...N>
-  using sram_bestN = best_config<sram_bestM<E,D,N,64,128,256,512>...>::type;
-  
+  using sram_bestN = best_config<sram_bestM<E,D,N,64,128,256>...>::type;
+
   template<u64 E, u64 D>
-  using sram =sram_bestN<E,D,64,128,256,512>;
+  using sram = sram_bestN<E,D,64,128,256>;
 
-  template<u64 E, u64 D0, u64 S, u64 ...I>
-  void test_sram_D(std::integer_sequence<u64,I...>)
-  {
-    (sram<E,D0+I*S>::print("D="+std::to_string(D0+I*S)+": "),...);
-  }
 
-  template<u64 D, u64 E0, f64 X, u64 ...I>
-  void test_sram_E(std::integer_sequence<u64,I...>)
-  {
-    (sram<llround(E0*pow(X,I)),D>::print("E="+std::to_string(llround(E0*pow(X,I)))+": "),...);
-  }  
-
-  
   // ###########################
 
   inline constexpr f64 OUTCAP = INVCAP;
@@ -2782,6 +2796,7 @@ namespace hcm {
     global<f64> energy_fJ;
     global<u64> transistors;
     global<u64> xtor_fins;
+    global<f64> area_sram_mm2;
 
   private:
     bool storage_destroyed = false;
@@ -2825,8 +2840,12 @@ namespace hcm {
       energy_fJ += c.e;
     }
 
-  public:
+    void update_sram_mm2(f64 area)
+    {
+      area_sram_mm2 += area;
+    }
 
+  public:
 
     f64 dyn_power_mW()
     {
@@ -2837,11 +2856,7 @@ namespace hcm {
 
     f64 sta_power_mW()
     {
-      u64 fins_sram = storage_sram * SRAM_CELL.fins;
-      assert(xtor_fins >= fins_sram);
-      u64 fins_logic = xtor_fins - fins_sram;
-      // FIXME: this is a very rough model (e.g., ignores stacking and temperature)
-      return ((fins_sram/2) * IOFF_SRAM + (fins_logic/2) * IOFF) * VDD * 1e3; // mW
+      return leakage_power_mW(xtor_fins,storage_sram);
     }
 
     void print(std::ostream & os = std::cout)
@@ -2855,6 +2870,7 @@ namespace hcm {
       os << "transistors: " << transistors << std::endl;
       if (transistors!=0)
 	os << "fins/transistor: " << f64(xtor_fins) / transistors << std::endl;
+      area_sram_mm2.print("SRAM area (mm2): ");
       if (cycle == first_cycle) {
 	energy_fJ.print("dynamic energy (fJ): ",os);	
       } else if (clock_cycle_ps != 0) {
@@ -2924,7 +2940,7 @@ namespace hcm {
 	// fanout exhausted: delay increases linearly with the number of reads
 	// delay increment is that of a FO2 inverter (wires not modeled, TODO?)	
 	constexpr circuit fo2inv = inv{}.make(2*INVCAP) * N; // N inverters in parallel
-	static_assert(fo2inv.delay()!=0);
+	static_assert(N==0 || fo2inv.delay()!=0);
 	// if the value is captured by a lambda executed by execute_if,
 	// reading the value costs energy regardless of the predicate
 	panel.update_fanout(fo2inv);
@@ -3696,7 +3712,7 @@ namespace hcm {
       // we do not bother providing an rvalue version
       static_assert(ival<U>,"index must be an integer");
       static_assert(N!=0);
-      static_assert(valt<U>::size<=std::bit_width(N-1),"index has too many bits");
+      static_assert(valt<U>::size<=std::bit_width(N-1),"array index has too many bits");
       if constexpr (N>=2) {
 	constexpr auto c = MUX<N,T::size>;
 	panel.update_logic(c[0]); // MUX select
@@ -4278,6 +4294,7 @@ namespace hcm {
     {
       panel.update_storage(static_ram::NBITS,true);
       panel.update_xtors(static_ram::XTORS,static_ram::FINS);
+      panel.update_sram_mm2(static_ram::area_mm2());
     }
 
     ~ram()
@@ -4298,7 +4315,6 @@ namespace hcm {
 	std::terminate();
       }
       last_write_cycle = panel.cycle;
-      panel.update_energy(static_ram::EWRITE);
       auto [av,at] = proxy::get_vt(std::forward<TYPEA>(address));
       if (is_less(av,0) || is_greater_equal(av,N)) {
 	std::cerr << "out-of-bounds RAM write (N=" << N << "; addr=" << av << ")" << std::endl;
@@ -4307,6 +4323,7 @@ namespace hcm {
       auto dv = proxy::get(std::forward<TYPED>(dataval));
       auto dt = proxy::time(dataval);
       if (exec.active) {
+	panel.update_energy(static_ram::EWRITE);
 	writes.push_back({u64(av),valuetype(dv),std::max(at,dt)});
 	std::push_heap(writes.begin(),writes.end());
       }

@@ -1,3 +1,5 @@
+* there must be a wiring penalty when user splits large RAM into multiple smaller RAMs
+
 * RAM can do 1 read + 1 write per cycle, not compatible with 6T single-port
 
 * SRAM cost function should take into account write latency (impacts energy)
