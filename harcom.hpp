@@ -2318,8 +2318,8 @@ namespace hcm {
     // Accessed data (D bits) lies in single bank
     // Bank is selected with XY-decoder before being accessed
     // Assume non-selected banks do not consume energy (TODO?)
-    // Assume unidirectional interconnects (separate read/write data wires... FIXME: is this OK?)
-    // Area of inter-bank wiring and logic is not modeled (TODO)
+    // Assume unidirectional interconnects (separate read/write data wires)
+    // Area of inter-bank wiring and logic is not modeled (TODO?)
     static_assert(N!=0 && M!=0 && D!=0);
     using BANK = sram_bank<N,M,D>;
     static constexpr u64 NB = BX * BY; // number of banks
@@ -2337,25 +2337,38 @@ namespace hcm {
     static constexpr circuit YDEC = (BY==1)? circuit{} : decode2(BY,XSEL.ci,BANK::HEIGHT) + XSEL * BY;
     static constexpr circuit SEL = (XDEC || YDEC) + SELG * (BX*BY); // bank select
     static constexpr u64 ABITS = (N>=2)? std::bit_width(N-1) : 1; // local (bank) address bits
+    static constexpr auto ETCW = [] (f64 co){ // edge-to-center wire
+      if (BX==1 || BY==1) {
+	circuit c;
+	c.ci = co;
+	return c;
+      } else {
+	f64 w = BANK::WIDTH * BX;
+	f64 h = BANK::HEIGHT * BY;
+	return wire(std::min(w,h)/2,false,co);
+      }
+    };
     static constexpr circuit ATREE = grid_demux(ABITS,BX,BY,BANK::WIDTH,BANK::HEIGHT,BANK::ABUS.ci); // address tree
     static constexpr circuit WTREE = grid_demux(D,BX,BY,BANK::WIDTH,BANK::HEIGHT,BANK::WBUS.ci); // data write tree
     static constexpr auto RTREE = grid_mux_preselect(D,BX,BY,BANK::WIDTH,BANK::HEIGHT); // read TREE
-    static constexpr circuit ACC = SEL || ATREE;
+    static constexpr circuit ANET = ETCW(ATREE.ci) * ABITS + ATREE;
+    static constexpr circuit WNET = ETCW(WTREE.ci) * D + WTREE;
+    static constexpr circuit ACC = SEL || ANET;
     static constexpr circuit READ = []() {
       circuit bankread;
       bankread.d = BANK::LATENCY;
       bankread.e = BANK::EREAD;
       // bank access starts after bank select signal has been broadcast
-      return ACC + (RTREE[0] || (bankread + RTREE[1]));
+      return ACC + (RTREE[0] || (bankread + RTREE[1])) + ETCW(INVCAP) * D;
     }();
 
     static void print2(std::string s = "", std::ostream & os = std::cout)
     {
-      ATREE.print(s+"ATREE: ",os);
-      SEL.print(s+"SEL: ",os);
-      RTREE[0].print(s+"RTREE select: ",os);
-      RTREE[1].print(s+"RTREE data: ",os);
-      WTREE.print(s+"WTREE: ",os);
+      ANET.print(s+"address network: ",os);
+      SEL.print(s+"bank select: ",os);
+      RTREE[0].print(s+"data-read network select: ",os);
+      RTREE[1].print(s+"data-read network data: ",os);
+      WNET.print(s+"data-write network: ",os);
       BANK::print(s+"NODE: ",os);
       //BANK::print2(s,os);
     }
@@ -2363,18 +2376,18 @@ namespace hcm {
     static constexpr u64 num_bits() {return NB * BANK::NBITS;}
     static constexpr f64 read_latency() {return READ.d;}
     static constexpr f64 read_energy() {return READ.e;}
-    static constexpr f64 write_energy() {return ACC.e + WTREE.e + BANK::EWRITE;}
+    static constexpr f64 write_energy() {return ACC.e + WNET.e + BANK::EWRITE;}
     static constexpr f64 array_width() {return BANK::WIDTH * BX;}
     static constexpr f64 array_height() {return BANK::HEIGHT * BY;}
 
     static constexpr u64 num_xtors()
     {
-      return NB * BANK::XTORS + ACC.t + WTREE.t + RTREE[0].t + RTREE[1].t;
+      return NB * BANK::XTORS + ACC.t + WNET.t + RTREE[0].t + RTREE[1].t;
     }
 
     static constexpr u64 num_fins()
     {
-      return NB * BANK::FINS + ACC.f + WTREE.f + RTREE[0].f + RTREE[1].f;
+      return NB * BANK::FINS + ACC.f + WNET.f + RTREE[0].f + RTREE[1].f;
     }    
   };
 
