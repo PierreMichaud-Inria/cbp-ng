@@ -15,6 +15,7 @@ struct predictor {
 
 
 class harcom_superuser {
+  predictor &pred;
   uint64_t nbranch = 0;
   uint64_t nmisp = 0;
   uint64_t max_pred_lat_ps = 0;
@@ -31,16 +32,17 @@ class harcom_superuser {
 
 public:
 
-  harcom_superuser()
+  harcom_superuser(predictor &pred) : pred(pred)
   {
     hcm::panel.clock_cycle_ps = 250;
+    hcm::panel.make_floorplan();
   }
 
-  void run(predictor &p, synthetic_trace &trace, int trace_length=10)
+  void run(synthetic_trace &trace, int trace_length=10)
   {
     for (int i=0; i<trace_length; i++) {
       auto [branch_pc,branch_dir,start_time] = next_branch(trace);
-      auto [prediction,pred_time] = p.predict({branch_pc,start_time}).get_vt();
+      auto [prediction,pred_time] = pred.predict({branch_pc,start_time}).get_vt();
       assert(pred_time >= start_time);
       uint64_t latency_ps = pred_time - start_time;
       if (latency_ps > max_pred_lat_ps)
@@ -48,7 +50,7 @@ public:
       if (prediction != branch_dir) {
 	nmisp++;
       }
-      p.update({branch_pc,start_time},{branch_dir,start_time/*FIXME?*/});
+      pred.update({branch_pc,start_time},{branch_dir,start_time/*FIXME?*/});
       hcm::panel.next_cycle();
     }
   }

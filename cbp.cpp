@@ -5,8 +5,8 @@
 #include "cbp.hpp"
 #include "branch_predictor.hpp"
 
-harcom_superuser sim;
 branch_predictor pred;
+harcom_superuser sim{pred};
 std::vector<synthetic_trace> traces;
 
 
@@ -28,6 +28,6 @@ int main(int argc, char * argv[])
   }
 
   for (u64 n=0, t=0; n<simlen; n+=period, t=(t+1)%traces.size()) {
-    sim.run(pred,traces[t],period);
+    sim.run(traces[t],period);
   }
 }

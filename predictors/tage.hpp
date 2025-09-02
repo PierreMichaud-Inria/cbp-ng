@@ -22,13 +22,8 @@ struct tage : predictor {
   static constexpr u64 METABITS = 4;
   static constexpr u64 UCTRBITS = 8;
 
-  ram<val<2>,NB> bim; // bimodal table
-  ram<val<TAGW>,NG> gtag[NUMG]; // global tables tags
-  ram<val<CTR>,NG> gctr[NUMG]; // global tables counters
-  ram<val<1>,NG> ubit[NUMG]; // "useful" bits
-
   geometric_folds<NUMG,MINHIST,GHIST,LOGG,TAGW> gfolds;
-  
+
   reg<LOGB> bi; // bimodal table index 
   arr<reg<LOGG>,NUMG> gi; // global tables indexes
   arr<reg<TAGW>,NUMG> gt; // computed tags
@@ -54,6 +49,12 @@ struct tage : predictor {
   reg<UCTRBITS> uctr; // u bits counter (reset u bits when counter saturates)
 #endif
 
+  ram<val<TAGW>,NG> gtag[NUMG] {"TAGS"}; // global tables tags
+  ram<val<CTR>,NG> gctr[NUMG] {"3-BIT CTRS"}; // global tables counters
+  ram<val<2>,NB> bim {"2-BIT CTRS"}; // bimodal table
+
+  zone UPDATE_ONLY;
+  ram<val<1>,NG> ubit[NUMG] {"U BITS"}; // "useful" bits
 
   tage()
   {
@@ -92,7 +93,7 @@ struct tage : predictor {
     readc.fanout(hard<4>{});
     notumask = ~readu.concat();
     notumask.fanout(hard<3>{});
-    
+
     // extract prediction bits
     arr<val<1>,NUMG> gpreds = [&](int i) {return val<1>{readc[i]>>(CTR-1)};};
     auto preds = gpreds.fo1().append(val<1>{readb>>1}).concat();
