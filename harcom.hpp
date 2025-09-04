@@ -595,11 +595,6 @@ namespace hcm {
   inline constexpr f64 INVCAP = 1+GAMMA; // input capacitance of single-fin inverter relative to CGATE
   inline constexpr f64 TAU_ps = CGATE_pF * REFF; // intrinsic delay (ps)
 
-  // Currently, we assume single-fin transistors everywhere (except for large fanout).
-  // TODO: it would be more realistic to assume 2-fin transistors (except in SRAM cell).
-  // As we do not model the effect of interconnects on gates delay, this does not matter for delay,
-  // however we underestimate the energy (2-fin transistor has larger gate capacitance)
-
   inline constexpr f64 DSE = 6; // default stage effort (delay vs energy tradeoff)
   inline constexpr u64 DSMAX = std::numeric_limits<u64>::max(); // default maximum scale is unlimited (FIXME?)
 
@@ -4176,7 +4171,7 @@ namespace hcm {
 	    assert(pos>=N[I]);
 	    pos -= N[I];
 	    std::get<I>(tup) = {v>>pos,t,x.site()};
-	  });
+	});
       }
     };
 
@@ -4409,7 +4404,7 @@ namespace hcm {
 	  assign_from(vx,tx,x.site());
 	}
       } else {
-	assign_from(x,0,val<N,T>::site(),true);
+	assign_from(x,0,val<N,T>::site());
       }
     }
 

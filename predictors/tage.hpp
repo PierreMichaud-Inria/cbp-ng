@@ -134,7 +134,7 @@ struct tage : predictor {
     goodpred.fanout(hard<NUMG+2>{});
     auto mispred = ~goodpred;
     mispred.fanout(hard<NUMG>{});
-    auto altdiff = (match2 != 0) & (pred2 != pred1);
+    auto altdiff = (match2 != hard<0>{}) & (pred2 != pred1);
     altdiff.fanout(hard<NUMG+1>{});
 #ifdef USE_META
     execute_if(altdiff & newly_alloc, [&](){meta = update_ctr(meta,pred2==dir);});
@@ -183,7 +183,7 @@ struct tage : predictor {
     auto allocmask1  = collamask1.reverse();
     allocmask1.fanout(hard<2>{});
     val<1> faralloc = (((match1>>3) | allocmask1).one_hot() ^ allocmask1) == hard<0>{};
-    val<1> uctrsat = (uctr == uctr.maxval);
+    val<1> uctrsat = (uctr == hard<decltype(uctr)::maxval>{});
     uctrsat.fanout(hard<2>{});
     uctr = select(goodpred,uctr,select(uctrsat,val<decltype(uctr)::size>{0},update_ctr(uctr,faralloc.fo1())));
     execute_if(uctrsat,[&](){for (auto &uram : ubit) uram.reset();});

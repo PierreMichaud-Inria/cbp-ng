@@ -10,7 +10,6 @@
 struct predictor {
   virtual hcm::val<1> predict(hcm::val<64> pc) = 0;
   virtual void update(hcm::val<64> pc, hcm::val<1> dir) = 0;
-  virtual ~predictor() {}
 };
 
 
