@@ -3663,6 +3663,7 @@ namespace hcm {
     template<u64,arith> friend class reg;
     template<valtype, u64> friend class arr;
     template<memdatatype,u64> friend class ram;
+    template<valtype,u64> friend class rom;
     friend class proxy;
     friend class ::harcom_superuser;
     template<valtype U, action A> friend auto execute_if(U&&,const A&);
@@ -4626,15 +4627,15 @@ namespace hcm {
       static_assert(std::unsigned_integral<rawtype>);
       static_assert(std::unsigned_integral<base<U>>);
       static_assert(N!=0);
-      static_assert(x.size!=0);
+      static_assert(valt<U>::size!=0);
       auto [v,t,l] = vtl;
       auto [vx,tx] = std::forward<U>(x).get_vt();
       auto a = pack_bits<T::size>(v);
-      if constexpr (x.size == 64) {
+      if constexpr (valt<U>::size == 64) {
 	for (u64 i=a.size()-1; i!=0; i--) a[i] = a[i-1];
 	a[0] = vx;
       } else {
-	static_assert(x.size<64);
+	static_assert(valt<U>::size<64);
 	for (u64 i=a.size()-1; i!=0; i--) {
 	  a[i] = (a[i] << x.size) | (a[i-1] >> (64-x.size));
 	}
@@ -4651,15 +4652,15 @@ namespace hcm {
       static_assert(std::unsigned_integral<rawtype>);
       static_assert(std::unsigned_integral<base<U>>);
       static_assert(N!=0);
-      static_assert(x.size!=0);
+      static_assert(valt<U>::size!=0);
       auto [v,t,l] = vtl;
       auto [vx,tx] = std::forward<U>(x).get_vt();
       auto a = pack_bits<T::size>(v);
-      if constexpr (x.size == 64) {
+      if constexpr (valt<U>::size == 64) {
 	for (u64 i=0; i<a.size()-1; i++) a[i] = a[i+1];
 	a[a.size()-1] = 0;
       } else {
-	static_assert(x.size<64);
+	static_assert(valt<U>::size<64);
 	for (u64 i=0; i<a.size()-1; i++) {
 	  a[i] = (a[i] >> x.size) | (a[i+1] << (64-x.size));
 	}
@@ -5624,7 +5625,7 @@ namespace hcm {
   template<valtype T1, valtype T2> requires (ival<T1> && ival<T2>)
   auto operator+ (T1 && x1, T2 && x2)
   {
-    constexpr circuit c = (x1.size==1)? INC<x2.size> : (x2.size==1)? INC<x1.size> : ADD<valt<T1,T2>::size>;
+    constexpr circuit c = (valt<T1>::size==1)? INC<valt<T2>::size> : (valt<T2>::size==1)? INC<valt<T1>::size> : ADD<valt<T1,T2>::size>;
     auto [v1,v2,t,l] = proxy::get_vtl(std::forward<T1>(x1),std::forward<T2>(x2));
     proxy::update_logic(l,c);
     using rtype = val<std::min(val<64>::size,valt<T1,T2>::size+1),decltype(v1+v2)>;
@@ -5973,7 +5974,7 @@ namespace hcm {
     // the delay/energy for gating the execution is not modeled (TODO?)
     static_assert(valtype<return_type<A>>);
     static_assert(std::unsigned_integral<base<T>>);
-    constexpr u64 N = mask.size;
+    constexpr u64 N = valt<T>::size;//mask.size;
     using rtype = valt<return_type<A>>;
     // return 0 if the condition is false (AND gate)
     constexpr circuit gate = AND<2> * rtype::size;
