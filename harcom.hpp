@@ -240,7 +240,123 @@ namespace hcm {
   template<action A>
   using return_type = action_return<A>::type;
 
+  // ######################################################
+  // math functions
 
+  // Unfortunately, in C++20, functions of the math library are not constexpr
+  // Clang and GCC seem to behave differently (Clang follows the standard)
+
+  constexpr f64 myfabs(f64 x)
+  {
+    return (x>=0)? x:-x;
+  }
+
+  constexpr f64 mysqrt(f64 x)
+  {
+    f64 y = 1;
+    for (u64 i=0; i<100; i++) {
+      f64 yy = y;
+      y = (y+x/y)*0.5;
+      y = (y+x/y)*0.5;
+      y = (y+x/y)*0.5;
+      y = (y+x/y)*0.5;
+      if (myfabs(yy-y)<y*1e-6) break;
+    }
+    return y;
+  }
+
+  constexpr f64 ipow(f64 x, u64 n)
+  {
+    f64 y = 1;
+    f64 p = x;
+    while (n) {
+      y *= (n&1)? p:1;
+      p = p*p;
+      n >>= 1;
+    }
+    return y;
+  }
+
+  constexpr f64 myexp(f64 x)
+  {
+    i64 n = x / std::numbers::ln2;
+    f64 xx = x - n * std::numbers::ln2;
+    f64 y = 1;
+    for (u64 k=20; k>=1; k--) {
+      y = 1+xx*y/k;
+    }
+    if (n>=0) {
+      return y * ipow(2,n);
+    } else {
+      return y / ipow(2,-n);
+    }
+  }
+
+  constexpr f64 mylog(f64 x)
+  {
+    assert(x>0);
+    if (x==1) return 0;
+    f64 y = 1;
+    for (u64 i=0; i<100; i++) {
+      f64 z = myexp(y);
+      y += 2*(x-z)/(x+z);
+      if (myfabs((z-x)/x)<1e-6) break;
+    }
+    return y;
+  }
+
+  constexpr f64 myceil(f64 x)
+  {
+    f64 y = 0;
+    if (x>=0) {
+      u64 n = x;
+      if (f64(n)!=x) n++;
+      y = n;
+    } else {
+      i64 n = x;
+      y = n;
+    }
+    assert(myfabs(y-x)<1); // triggers when |x| huge
+    return y;
+  }
+
+  constexpr f64 myfloor(f64 x)
+  {
+    f64 y = 0;
+    if (x>=0) {
+      u64 n = x;
+      y = n;
+    } else {
+      i64 n = x;
+      if (f64(n)!=x) n--;
+      y = n;
+    }
+    assert(myfabs(y-x)<1); // triggers when |x| huge
+    return y;
+  }
+
+  constexpr i64 myllround(f64 x)
+  {
+    return (x>=0)? x+0.5 : x-0.5;
+  }
+
+  constexpr f64 mypow(f64 x, f64 p)
+  {
+    if (p==0) return 1.;
+    if (x==0) return 0;
+    i64 n = p;
+    if (f64(n)==p) {
+      if (n>=0) {
+	return ipow(x,n);
+      } else {
+	return 1. / ipow(x,-n);
+      }
+    }
+    assert(x>0);
+    return myexp(p*mylog(x));
+  }
+
+  
   // ######################################################
   // integer comparison functions
 
@@ -350,8 +466,8 @@ namespace hcm {
   constexpr u64 to_pow2(f64 x)
   {
     // returns the power of 2 closest to x
-    u64 n0 = std::bit_floor(u64(llround(floor(x))));
-    u64 n1 = std::bit_ceil(u64(llround(ceil(x))));
+    u64 n0 = std::bit_floor(u64(myllround(myfloor(x))));
+    u64 n1 = std::bit_ceil(u64(myllround(myceil(x))));
     return (x*x > n0*n1)? n1 : n0;
   }
 
@@ -545,7 +661,7 @@ namespace hcm {
     f64 density = fins / area;
     f64 aspect_ratio = 2; // wordline longer than bitline
     f64 drain_blwire_cap_ratio = 2.33;
-    f64 bitline_length = sqrt(area/aspect_ratio); // um
+    f64 bitline_length = mysqrt(area/aspect_ratio); // um
     f64 wordline_length = bitline_length * aspect_ratio; // um
     f64 bitline_wirecap = bitline_length * METALCAP_fF; // fF
     f64 wordline_wirecap = wordline_length * METALCAP_fF; // fF
@@ -578,13 +694,15 @@ namespace hcm {
   inline constexpr f64 CGATE_pF = CGATE_fF * 1e-3; // pF
   inline constexpr f64 METALCAP = METALCAP_fF / CGATE_fF; // linear metal capacitance in units of CGATE
   inline constexpr f64 METALCAP_pF = METALCAP * CGATE_pF; // pF
+  inline constexpr f64 VDD0 = 0.75; // nominal supply voltage (V)
   inline constexpr f64 VDD = 0.75; // supply voltage (V)
 
   // Idsat and Ioff values are taken from (FIXME?)
   // "ASAP5: a predictive PDK for the 5 nm node", Vashishtha & Clark, Microelectronics Journal 126 (2022)
   // FIXME: these numbers are for 0.7 V and 25 C
-  inline constexpr f64 IDSAT = 60e-6; // nFET Idsat (A) per fin
-  inline constexpr f64 IDSAT_SRAM = 40e-6; // nFET Idsat (A) per fin in an SRAM cell
+  inline constexpr f64 GM = 130e-6; // transconductance dIds/dVgs (A/V)
+  inline constexpr f64 IDSAT = 60e-6 + GM * (VDD-VDD0); // nFET Idsat (A) per fin
+  inline constexpr f64 IDSAT_SRAM = 40e-6 + GM * (VDD-VDD0); // nFET Idsat (A) per fin in an SRAM cell
   inline constexpr f64 IOFF = 1e-9; // leakage current per fin (A)
   inline constexpr f64 IOFF_SRAM = 17e-12; // leakage current per fin (A) in an SRAM cell
 
@@ -596,7 +714,7 @@ namespace hcm {
   inline constexpr f64 TAU_ps = CGATE_pF * REFF; // intrinsic delay (ps)
 
   inline constexpr f64 DSE = 6; // default stage effort (delay vs energy tradeoff)
-  inline constexpr u64 DSMAX = std::numeric_limits<u64>::max(); // default maximum scale is unlimited (FIXME?)
+  inline constexpr f64 DSMAX = 1000000; // default maximum scale is unlimited (FIXME?)
 
 
   constexpr f64 energy_fJ(f64 cap_fF, f64 vdiff/*volt*/)
@@ -637,7 +755,7 @@ namespace hcm {
   constexpr f64 proba_bias(f64 proba_switch)
   {
     assert(proba_switch <= 0.5); // random switching (Bernoulli process)
-    return 0.5 * (1-sqrt(1-2*proba_switch)); // does not exceed 1/2
+    return 0.5 * (1-mysqrt(1-2*proba_switch)); // does not exceed 1/2
   }
 
 
@@ -667,7 +785,7 @@ namespace hcm {
       return t==0;
     }
 
-    constexpr u64 delay() const {return llround(ceil(d));}
+    constexpr u64 delay() const {return myllround(myceil(d));}
 
     void print(std::string s = "", std::ostream & os = std::cout) const
     {
@@ -858,9 +976,9 @@ namespace hcm {
     // higher stage effort increases delay but reduces energy
     assert(path_effort>=1);
     auto delay = [=] (u64 ninv) {
-      return (ninv+1) * (PINV+pow(path_effort,1./(ninv+1)));
+      return (ninv+1) * (PINV+mypow(path_effort,1./(ninv+1)));
     };
-    i64 n = std::max(1.,ceil(log(path_effort) / log(STAGE_EFFORT))) - 1;
+    i64 n = std::max(1.,myceil(mylog(path_effort) / mylog(STAGE_EFFORT))) - 1;
     assert(n>=0);
     n += (n & 1) ^ odd;
     u64 nn = n;
@@ -875,19 +993,19 @@ namespace hcm {
   {
     // higher stage effort increases delay but reduces energy
     assert(path_effort>=1);
-    i64 n = log(path_effort) / log(STAGE_EFFORT);
+    i64 n = mylog(path_effort) / mylog(STAGE_EFFORT);
     assert(n>=0);
     n += (n & 1) ^ odd;
     return n;
   }
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit buffer(f64 co, bool cpl, f64 scale=1, f64 bias=0.5)
   {
     assert(scale==1);
     f64 fo = std::max(1.,co/inv{}.icap());
     u64 ninv = num_stages_inv<SE>(fo,cpl);
-    f64 beta = pow(fo,1./(ninv+1));
+    f64 beta = mypow(fo,1./(ninv+1));
     assert(beta>0);
     if (fo/beta > SMAX) {
       circuit last = inv{}.make(co,SMAX,bias);
@@ -907,7 +1025,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX, u64 L=1/*layer*/>
+  template<f64 SE=DSE, f64 SMAX=DSMAX, u64 L=1/*layer*/>
   constexpr circuit wire(f64 length/*um*/, bool cpl=0, f64 cload=0, bool dload=true, f64 bias=0.5)
   {
     // Unidirectional segmented wire
@@ -921,10 +1039,10 @@ namespace hcm {
     f64 co = (dload)? 0 : cload; // terminal load capacitance, relative to CGATE
     // for distributed load cap, merge with wire capacitance (FIXME: is this good approx?)
     f64 linearcap = METALCAP + ((dload)? (cload/length) : 0); // CGATE/um
-    f64 seglen = sqrt(2*REFF*INVCAP*(1+PINV) / (linearcap*METALRES[L])); // um
-    f64 optinvscale = sqrt(REFF * linearcap / (INVCAP * METALRES[L]));
-    f64 invscale = std::min(f64(SMAX),optinvscale); // inverter scale
-    u64 nseg = std::max(u64(1), u64(llround(length/seglen))); // number of segments
+    f64 seglen = mysqrt(2*REFF*INVCAP*(1+PINV) / (linearcap*METALRES[L])); // um
+    f64 optinvscale = mysqrt(REFF * linearcap / (INVCAP * METALRES[L]));
+    f64 invscale = std::max(1.,std::min(f64(SMAX),optinvscale)); // inverter scale
+    u64 nseg = std::max(u64(1), u64(myllround(length/seglen))); // number of segments
     seglen = length / nseg; // segment length (um)
     f64 cseg = linearcap * seglen; // wire segment capacitance relative to CGATE
     // transistors:
@@ -972,7 +1090,7 @@ namespace hcm {
   {
     // a,b,c ==> ab+ac+bc = ~(~(b+c)+(~a~(bc)))
     and_nor aoi;
-    f64 scale_aoi = std::max(1.,sqrt(co/aoi.icap<1>()));
+    f64 scale_aoi = std::max(1.,mysqrt(co/aoi.icap<1>()));
     f64 c1 = aoi.icap<0>(scale_aoi);
     f64 c2 = aoi.icap<1>(scale_aoi);
     circuit i = inv{}.make(c2);
@@ -982,7 +1100,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX, u64 ARITY=4>
+  template<f64 SE=DSE, f64 SMAX=DSMAX, u64 ARITY=4>
   constexpr circuit nand_nor_tree(u64 n, bool nandfirst, bool cpl, f64 co, f64 scale=1, f64 bias=0.5)
   {
     // alternate NANDs and NORs
@@ -1042,7 +1160,7 @@ namespace hcm {
     f64 fanout = co/ci;
     u64 path_effort = std::max(1.,path_logical_effort(n)*fanout);
     u64 depth_target = num_stages<SE>(path_effort);
-    u64 depth = llround(ceil(log(n)/log(ARITY)));
+    u64 depth = myllround(myceil(mylog(n)/mylog(ARITY)));
     bool extra_inv = (depth & 1) ^ cpl; // odd number of stages if cpl=true, even otherwise
     depth += extra_inv;
     u64 ninv = 0;
@@ -1054,7 +1172,7 @@ namespace hcm {
     }
     ninv += extra_inv;
     assert(depth!=0);
-    f64 stage_effort = pow(path_effort,1./depth);
+    f64 stage_effort = mypow(path_effort,1./depth);
 
     if (path_effort/stage_effort > SMAX) {
       circuit last = inv{}.make(co,SMAX,bias);
@@ -1076,7 +1194,7 @@ namespace hcm {
 	stage = stage || (gate[nand_stage][w].make(cload,scale,bias) * ngates[nand_stage][w]);
       }
       tree = tree + stage;
-      bias = pow(bias,prev_width); // each NAND/NOR stage reduces switching probability (neglect glitching)
+      bias = mypow(bias,prev_width); // each NAND/NOR stage reduces switching probability (neglect glitching)
       depth--;
       scale = next_scale;
       nand_stage ^= 1;
@@ -1098,28 +1216,28 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit anding(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return nand_nor_tree<SE,SMAX>(n,true,false,co,scale,bias);
   }
 
   
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit oring(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return nand_nor_tree<SE,SMAX>(n,false,false,co,scale,bias);
   }  
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit nanding(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return nand_nor_tree<SE,SMAX>(n,true,true,co,scale,bias);
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit noring(u64 n, f64 co, f64 scale=1, f64 bias=0.5)
   {
     return nand_nor_tree<SE,SMAX>(n,false,true,co,scale,bias);
@@ -1128,7 +1246,7 @@ namespace hcm {
 
   constexpr circuit xor2(f64 co, f64 bias=0.5)
   {
-    f64 scale = std::max(1.,sqrt(co/(xor_cpl{}.icap())));
+    f64 scale = std::max(1.,mysqrt(co/(xor_cpl{}.icap())));
     circuit x = xor_cpl{}.make(co,scale,bias);
     circuit i = inv{}.make(x.ci,1.,bias);
     circuit c = i*2+x;
@@ -1143,7 +1261,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit decode1(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/)
   {
     // single-level decoder
@@ -1166,7 +1284,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit decode2(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/)
   {
     // two-level decoder
@@ -1186,7 +1304,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit decode2_rep(u64 no/*outputs*/, f64 co, f64 pitch=0/*um*/, u64 rep=1)
   {
     // two-level decoder with replicated outputs
@@ -1206,7 +1324,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX, u64 ARITY=4>
+  template<f64 SE=DSE, f64 SMAX=DSMAX, u64 ARITY=4>
   constexpr auto mux_tree(u64 n/*inputs (data)*/, u64 m/*bits per input*/, f64 co)
   {
     // select input in encoded form
@@ -1288,7 +1406,7 @@ namespace hcm {
   }
 
   
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr auto mux(u64 n/*inputs (data)*/, u64 m/*bits per input*/, f64 co)
   {
     assert(n>=2);
@@ -1299,7 +1417,7 @@ namespace hcm {
   }
 
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr circuit grid_demux(u64 nbits, u64 nx, u64 ny, f64 dx/*um*/, f64 dy/*um*/, f64 cnode=0, u64 abits=1)
   {
     // sends an nbits-bit payload to one of nx*ny nodes
@@ -1344,7 +1462,7 @@ namespace hcm {
   }
   
 
-  template<f64 SE=DSE, u64 SMAX=DSMAX>
+  template<f64 SE=DSE, f64 SMAX=DSMAX>
   constexpr auto grid_mux_preselect(u64 nbits, u64 nx, u64 ny, f64 dx/*um*/, f64 dy/*um*/, bool init=1, bool pol=0)
   {
     // each input data (nbits bits) is tagged with a "select" bit, which has been precomputed
@@ -1413,7 +1531,7 @@ namespace hcm {
       return c;
     } else {
        // a+b
-      f64 scale = std::max(1.,sqrt(co/(xor_cpl{}.icap()+nor{2}.icap())));
+      f64 scale = std::max(1.,mysqrt(co/(xor_cpl{}.icap()+nor{2}.icap())));
       circuit x = xor_cpl{}.make(co,scale); // sum (a^b)
       circuit n = nor{2}.make(co,scale); // carry out (ab)
       circuit c = x|n;
@@ -1430,7 +1548,7 @@ namespace hcm {
   {
     if constexpr (INCR) {
       // a+b+1
-      f64 scale = std::max(1.,sqrt(co/(xnor_cpl{}.icap()+nand{2}.icap())));
+      f64 scale = std::max(1.,mysqrt(co/(xnor_cpl{}.icap()+nand{2}.icap())));
       circuit x = xnor_cpl{}.make(co,scale); // sum = a^~b = ~(a^b)
       circuit n = nand{2}.make(co,scale); // carry = a+b = ~(~a~b)
       circuit xn = x|n;
@@ -1446,9 +1564,9 @@ namespace hcm {
       f64 scale_aoi = 1;
       f64 a = and_nor{}.icap<1>() * or_nand{}.icap<1>() / (co*co);
       f64 b = co / or_nand{}.icap<1>();
-      auto f = [&](f64 x) {return a*pow(x,4)-b;};
-      f64 x0 = sqrt(sqrt(b/a));
-      f64 x1 = x0 / (1.-1./(4*a*pow(x0,3)));
+      auto f = [&](f64 x) {return a*mypow(x,4)-b;};
+      f64 x0 = mysqrt(mysqrt(b/a));
+      f64 x1 = x0 / (1.-1./(4*a*mypow(x0,3)));
       if (x1 >= x0) {
 	// always true if co has reasonable value (>=INVCAP)
 	assert(f(x0)<=x0 && f(x1)>=x1);
@@ -2179,7 +2297,7 @@ namespace hcm {
 
     // the following cost function is arbitrary (prioritizes latency over energy and reads over writes)
     // ignores write latency and leakage power (TODO?)
-    static constexpr f64 COST = (2*EREAD+EWRITE) * pow(LATENCY,3);
+    static constexpr f64 COST = (2*EREAD+EWRITE) * mypow(LATENCY,3);
 
     static void print(std::string s = "", std::ostream & os = std::cout)
     {
@@ -2258,7 +2376,7 @@ namespace hcm {
     static constexpr f64 SASCALE = SACAP/SACAPMIN;
     static_assert(SASCALE>=1);
 
-    static constexpr f64 BLSWING = SAVBLMIN * sqrt(SACAPMAX/SACAP); // bitline voltage swing (V)
+    static constexpr f64 BLSWING = SAVBLMIN * mysqrt(SACAPMAX/SACAP); // bitline voltage swing (V)
 
     // drive wordline from the mid point (Amrutur & Horowitz)
     static constexpr f64 WLRC = wire_res_delay((M/2)*WLRES, (M/2)*WLCAP_pF);
@@ -2286,8 +2404,8 @@ namespace hcm {
 
     // gates layout in peripheric logic is constrained by the wordline/bitline pitch
     // not sure to what extent this limits the gate size (TODO?)
-    static constexpr u64 SX = 10; // maximum inverter scale at bitline pitch
-    static constexpr u64 SY = 10; // maximum inverter scale at wordline pitch
+    static constexpr f64 SX = 10; // maximum inverter scale at bitline pitch
+    static constexpr f64 SY = 10; // maximum inverter scale at wordline pitch
     static constexpr f64 SEFF = 4;
 
     static constexpr circuit RDEC = decode2<SEFF,SY>(N,M*WLCAP,SRAM_CELL.bitline_length); // row decoder
@@ -2355,8 +2473,8 @@ namespace hcm {
     static constexpr f64 ASPECT_RATIO = CELLS_WIDTH / CELLS_HEIGHT;
 
     static constexpr u64 num_bits() {return N * M;}
-    static constexpr f64 array_width() {return sqrt(AREA*ASPECT_RATIO);} // um
-    static constexpr f64 array_height() {return sqrt(AREA/ASPECT_RATIO);} // um
+    static constexpr f64 array_width() {return mysqrt(AREA*ASPECT_RATIO);} // um
+    static constexpr f64 array_height() {return mysqrt(AREA/ASPECT_RATIO);} // um
     static constexpr u64 num_xtors() {return CELL_XTORS + PERI_XTORS;}
     static constexpr u64 num_fins() {return CELL_FINS + PERI_FINS;}
 
@@ -2561,7 +2679,7 @@ namespace hcm {
       } else {
 	// multiple columns (BY=2^k)
 	// we want squarish shape
-	constexpr f64 S = sqrt(R*W*SRAM_CELL.aspect_ratio); // square side
+	constexpr f64 S = mysqrt(R*W*SRAM_CELL.aspect_ratio); // square side
 	static_assert(S>=N);
 	static_assert(S<=R);
 	constexpr u64 BY = std::min(to_pow2(S/N),std::bit_floor(R/N));
@@ -2736,7 +2854,7 @@ namespace hcm {
       f64 co = INVCAP;
       circuit output = nor{2}.make(co);
       f64 ocap[N-1];
-      std::fill(ocap,ocap+N-1,output.ci);
+      for (u64 i=0; i<(N-1); i++) ocap[i] = output.ci;
       auto nor2 = [] (f64 co) {return nor{2}.make(co);};
       auto nand2 = [] (f64 co) {return nand{2}.make(co);};
       circuit prefix_or = parallel_prefix(1,nor2,nand2,ocap);
@@ -2859,7 +2977,7 @@ namespace hcm {
       u64 n = s.size();
       assert(n);
       assert(num_similar(s)==n);
-      u64 ny = sqrt(n);
+      u64 ny = mysqrt(n);
       u64 nx = (n+ny-1)/ny;
       assert(nx*ny>=n);
       return {nx,ny};
@@ -4100,7 +4218,7 @@ namespace hcm {
       constexpr u64 N = 1 + sizeof...(xi);
       // read values before timing
       const auto vtup = std::make_tuple(std::forward<T1>(x1).get(),std::forward<Ti>(xi).get()...);
-      constexpr std::array<u64,N> sz = {x1.size,xi.size...};
+      constexpr std::array<u64,N> sz = {valt<T1>::size,valt<Ti>::size...};
       std::array<u64,N> tm = {x1.time(),xi.time()...};
       const std::array<u64,N> loc = {x1.site(),xi.site()...};
       auto latest = std::max_element(tm.begin(),tm.end());
@@ -4163,11 +4281,11 @@ namespace hcm {
       split_helper(T && x)
       {
 	constexpr u64 sum = (N1+...+Ni);
-	static_assert(x.size==sum,"sum of split sizes must match number of bits");
+	static_assert(valt<T>::size==sum,"sum of split sizes must match number of bits");
 	constexpr std::array N = {N1,Ni...};
 	auto [v,t] = std::forward<T>(x).get_vt();
 	u64 pos = sum;
-	static_loop<N.size()>([&]<u64 I>() {
+	static_loop<1+sizeof...(Ni)>([&]<u64 I>() {
 	    assert(pos>=N[I]);
 	    pos -= N[I];
 	    std::get<I>(tup) = {v>>pos,t,x.site()};
@@ -4436,7 +4554,7 @@ namespace hcm {
     template<arrtype U>
     void copy_from(U && x)
     {
-      static_assert(x.size == N,"destination and source array must have the same size");
+      static_assert(std::remove_reference_t<U>::size==N,"destination and source array must have the same size");
       if constexpr (std::is_rvalue_reference_v<decltype(x)>) {
 	for (u64 i=0; i<N; i++) elem[i] = x.elem[i].fo1();
       } else {
@@ -5154,7 +5272,7 @@ namespace hcm {
 	std::pop_heap(writes.begin(),writes.end());
 	writes.pop_back();
       }
-      u64 t = ta + std::llround(static_ram::LATENCY); // time at which the read completes
+      u64 t = ta + myllround(static_ram::LATENCY); // time at which the read completes
       if (is_less(va,0) || is_greater_equal(va,N)) {
 	std::cerr << "out-of-bounds RAM read (N=" << N << "; addr=" << va << ")" << std::endl;
 	std::terminate();
@@ -5784,9 +5902,8 @@ namespace hcm {
     static_assert(std::unsigned_integral<base<T1>>,"concat takes unsigned integers");
     static_assert((std::unsigned_integral<base<Ti>> && ...),"concat takes unsigned integers");
     constexpr u64 N = 1 + sizeof...(xi);
-    constexpr std::array si = {x1.size, xi.size...};
-    static_assert(si.size()==N);
-    constexpr u64 SIZE = (x1.size + ... + xi.size);
+    constexpr std::array si = {valt<T1>::size, valt<Ti>::size...};
+    constexpr u64 SIZE = (valt<T1>::size + ... + valt<Ti>::size);
     static_assert(SIZE<=64,"concatenation exceeds 64 bits");
     auto tup = proxy::get_vtl(std::forward<T1>(x1), std::forward<Ti>(xi)...);
     static_assert(std::tuple_size_v<decltype(tup)> == N+2);

@@ -1,6 +1,6 @@
-need recent compiler (C++20)
-gcc: version 12 or later (version 11 maybe, not tested)
-clang: not tested (at least version 18)
+Harcom heavily uses C++20 features, you need a recent compiler.
+GCC (recommended): version 12 or later
+Clang: version 21 or later
 
 chmod u+x compile
 

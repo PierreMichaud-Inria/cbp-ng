@@ -97,7 +97,7 @@ struct geometric_folds {
     std::array<u64,NH> hlen;
     u64 prevhl = 0;
     for (u64 i=0; i<NH; i++) {
-      u64 hl = MINH * pow(f64(MAXH)/MINH,f64(i)/(NH-1));
+      u64 hl = MINH * mypow(f64(MAXH)/MINH,f64(i)/(NH-1));
       hl = std::max(prevhl+1,hl);
       hlen[NH-1-i] = hl;
       prevhl = hl;
