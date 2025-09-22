@@ -3812,7 +3812,7 @@ namespace hcm {
     val rotate_left(i64 shift, const std::tuple<T,u64> &vt)
     {
       static_assert(std::unsigned_integral<T>,"rotate_left() applies to unsigned int");
-      u64 k = (shift>=0)? shift%N : -shift%N;
+      u64 k = (shift>=0)? shift%N : (i64(N)+shift)%N;
       auto [v,t] = vt;
       auto y = v<<k | v>>(N-k);
       return {y,t,site()};
@@ -5742,11 +5742,11 @@ namespace hcm {
     auto [v1,t1,l1] = proxy::get_vtl(std::forward<T1>(x1));
     proxy::update_logic(l1,c);
     if constexpr (std::unsigned_integral<decltype(v1*x2)>) {
-      using rtype = val<minbits(x1.maxval*u2),decltype(v1*x2)>;
+      using rtype = val<minbits(valt<T1>::maxval*u2),decltype(v1*x2)>;
       return proxy::make_val<rtype>(v1*x2, t1+c.delay(), l1);
     } else {
       static_assert(std::signed_integral<decltype(v1*x2)>);
-      constexpr u64 rsize = std::min(minbits(x1.maxval*x2),minbits(x1.minval*x2));
+      constexpr u64 rsize = std::min(minbits(valt<T1>::maxval*x2),minbits(valt<T1>::minval*x2));
       using rtype = val<rsize,decltype(v1*x2)>;
       return proxy::make_val<rtype>(v1*x2, t1+c.delay(), l1);
     }
@@ -5768,7 +5768,7 @@ namespace hcm {
     constexpr circuit c = UDIV<valt<T1>::size,x2>;
     auto [v1,t1,l1] = proxy::get_vtl(std::forward<T1>(x1));
     proxy::update_logic(l1,c);
-    constexpr u64 N = std::bit_width(x1.maxval/x2);
+    constexpr u64 N = std::bit_width(valt<T1>::maxval/x2);
     using rtype = val<std::max(N,u64(1)),decltype(v1/x2)>;
     return proxy::make_val<rtype>(v1/x2, t1+c.delay(), l1);
   }
