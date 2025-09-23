@@ -3293,6 +3293,7 @@ namespace hcm {
     global<u64> cycle = first_cycle;
 
   private:
+    bool arr_of_regs_ctor = false;
     bool storage_destroyed = false;
 
     std::vector<region*> regions;
@@ -3812,10 +3813,15 @@ namespace hcm {
     val rotate_left(i64 shift, const std::tuple<T,u64> &vt)
     {
       static_assert(std::unsigned_integral<T>,"rotate_left() applies to unsigned int");
-      u64 k = (shift>=0)? shift%N : (i64(N)+shift)%N;
+      i64 k = (shift>=0)? shift % N : (shift % i64(N))+N;
+      assert(k>=0);
       auto [v,t] = vt;
-      auto y = v<<k | v>>(N-k);
-      return {y,t,site()};
+      if (k==0) {
+	return {v,t,site()};
+      } else {
+	auto y = v<<k | v>>(N-k);
+	return {y,t,site()};
+      }
     }
 
     auto ones(const std::tuple<T,u64> &vt)
@@ -4493,7 +4499,8 @@ namespace hcm {
 	std::cerr << "single register write per cycle" << std::endl;
 	std::terminate();
       }
-      last_write_cycle = panel.cycle; 
+      if (! panel.arr_of_regs_ctor)
+	last_write_cycle = panel.cycle;
       t += panel.connect_delay(loc,val<N,T>::site(),val<N,T>::size);
       val<N,T>::set_time(t);
       // location is fixed
@@ -4778,33 +4785,41 @@ namespace hcm {
 
     arr(unaryfunc<u64,T> auto f)
     {
+      panel.arr_of_regs_ctor = true;
       for (u64 i=0; i<N; i++) {
 	elem[i] = f(i);
       }
+      panel.arr_of_regs_ctor = false;
     }
 
     arr(unaryfunc<void,T> auto f)
     {
+      panel.arr_of_regs_ctor = true;
       for (u64 i=0; i<N; i++) {
 	elem[i] = f();
       }
+      panel.arr_of_regs_ctor = false;
     }
 
     template<arraylike U>
     arr(U && a)
     {
       static_assert(arraysize<U> == N,"array size mismatch");
+      panel.arr_of_regs_ctor = true;
       if constexpr (std::is_rvalue_reference_v<decltype(a)>) {
 	for (u64 i=0; i<N; i++) elem[i] = std::move(a[i]);
       } else {
 	for (u64 i=0; i<N; i++) elem[i] = a[i];
       }
+      panel.arr_of_regs_ctor = false;
     }
 
     template<arrtype U>
-    arr(U &&x)
+    arr(U && x)
     {
+      panel.arr_of_regs_ctor = true;
       copy_from(std::forward<U>(x));
+      panel.arr_of_regs_ctor = false;
     }
 
     void operator= (arr &x) requires (regtype<T>)
@@ -4813,7 +4828,7 @@ namespace hcm {
     }
 
     template<arrtype U> requires (regtype<T>)
-    void operator= (U &&x)
+    void operator= (U && x)
     {
       copy_from(std::forward<U>(x));
     }
@@ -4923,15 +4938,23 @@ namespace hcm {
     [[nodiscard]] auto truncate(hard<L>) & // lvalue
     {
       static_assert(L<N,"truncate means making the array shorter");
-      return arr<valt<T>,L> {[&](u64 i){return elem[i];}};
+      return arr<valt<T>,L> {
+	[&](u64 i) -> valt<T> {
+	  return elem[i];
+	}
+      };
     }
 
     template<std::integral auto L>
     [[nodiscard]] auto truncate(hard<L>) && // rvalue
     {
       static_assert(L<N,"truncate means making the array shorter");
-      return arr<valt<T>,L> {[&](u64 i){return elem[i].fo1();}};
-    }    
+      return arr<valt<T>,L> {
+	[&](u64 i) -> valt<T> {
+	  return elem[i].fo1();
+	}
+      };
+    }
 
     template<u64 W>
     [[nodiscard]] auto make_array(val<W>&&) & // lvalue
@@ -5736,7 +5759,7 @@ namespace hcm {
   template<valtype T1, intlike T2> requires (ival<T1>) // 2nd argument is constant
   auto operator* (T1 && x1, T2 x2)
   {
-    static_assert(hardval<T2>,"constant argument must be a hard value (hard<N>{})");
+    static_assert(hardval<T2>,"constant multiplier must be a hard value (hard<N>{})");
     constexpr u64 u2 = (x2>=0)? x2 : truncate<minbits(x2.value)>(x2.value); // convert x2 to unsigned
     constexpr circuit c = HIMUL<u2,valt<T1>::size>; // TODO: signed multiplication
     auto [v1,t1,l1] = proxy::get_vtl(std::forward<T1>(x1));
