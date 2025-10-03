@@ -222,9 +222,7 @@ struct tage : predictor {
     meta.fanout(hard<2>{});
     newly_alloc.fanout(hard<2>{});
 #endif
-
-    val<lineinst> update_valid = (1<<update_rank)-1;
-    update_valid.fanout(hard<lineinst+NUMG>{});
+    u64 update_valid = (u64(1)<<update_rank)-1;
 
     if (update_rank==0) {
       last_offset = lineinst-1;
@@ -247,7 +245,7 @@ struct tage : predictor {
     };
     is_branch.fanout(hard<3>{});
 
-    val<lineinst+NUMG> actualdirs = update_dir.concat();
+    val<lineinst> actualdirs = update_dir.concat();
     actualdirs.fanout(hard<lineinst+NUMG>{});
 
     arr<val<1>,lineinst> branch_dir = [&](u64 offset){
