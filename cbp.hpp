@@ -4,64 +4,121 @@
 #include "synthetic_trace.hpp"
 #include "harcom.hpp"
 
-//using namespace hcm;
+using namespace hcm;
+
+
+static constexpr u64 loglinebytes = 6;
+static constexpr u64 linebytes = 1 << loglinebytes; 
+static constexpr u64 loginstbytes = 2;
+static constexpr u64 instbytes = 1 << loginstbytes;
+static constexpr u64 loglineinst = loglinebytes - loginstbytes;
+static constexpr u64 lineinst = 1 << loglineinst;
+
+
+u64 inst_offset(u64 inst_pc)
+{
+  return (inst_pc >> loginstbytes) % lineinst;
+}
 
 
 struct predictor {
-  virtual hcm::val<1> predict(hcm::val<64> pc) = 0;
-  virtual void update(hcm::val<64> pc, hcm::val<1> dir) = 0;
+  using predbits = arr<val<1>,lineinst>;
+  using validbits = arr<val<1>,lineinst>;
+  using pred_output = std::tuple<predbits,validbits>;
+  virtual pred_output predict(val<64> inst_pc) = 0;
+  virtual void update(val<64> branch_pc, val<1> dir, val<64> next_pc) = 0;
 };
 
 
 class harcom_superuser {
   predictor &pred;
-  uint64_t nbranch = 0;
-  uint64_t nmisp = 0;
-  uint64_t max_pred_lat_ps = 0;
-  uint64_t t = 0; // ps
-  
-  auto next_branch(synthetic_trace &trace)
-  {
-    auto [branch_pc,branch_dir,nextpc] = trace.next();
-    std::tuple branch {branch_pc,branch_dir,t};
-    t += hcm::panel.clock_cycle_ps;
-    nbranch++;
-    return branch;
-  }
+  u64 ninst = 0;
+  u64 ncycle = 0;
+  u64 nbranch = 0;
+  u64 nmisp = 0;
+  u64 max_pred_lat_ps = 0;
+  u64 t = 0; // ps
 
+  auto next_instruction(synthetic_trace &trace)
+  {
+    auto [inst_pc, is_branch, is_taken, next_pc] = trace.next_instruction();
+    ninst++;
+    if (is_branch) nbranch++;
+    return std::tuple {inst_pc, is_branch, is_taken, next_pc};
+  }
+  
 public:
 
   harcom_superuser(predictor &pred) : pred(pred)
   {
-    hcm::panel.clock_cycle_ps = 250;
-    hcm::panel.make_floorplan();
+    panel.clock_cycle_ps = 250;
+    panel.make_floorplan();
   }
 
-  void run(synthetic_trace &trace, int trace_length=10)
+  void run(synthetic_trace &trace, u64 trace_length=10)
   {
-    for (int i=0; i<trace_length; i++) {
-      auto [branch_pc,branch_dir,start_time] = next_branch(trace);
-      auto [prediction,pred_time] = pred.predict({branch_pc,start_time}).get_vt();
-      assert(pred_time >= start_time);
-      uint64_t latency_ps = pred_time - start_time;
-      if (latency_ps > max_pred_lat_ps)
-	max_pred_lat_ps = latency_ps;
-      if (prediction != branch_dir) {
+    trace_length += nbranch;
+    bool pred_available = false;
+    std::array<u64,lineinst> taken;
+    std::array<u64,lineinst> valid;
+
+    while (nbranch < trace_length) {
+
+      // one instruction per iteration
+      auto [pc, is_branch, is_taken, next_pc] = next_instruction(trace);
+ 
+      if (! pred_available) {
+	// get predictions for new block
+	auto [preds,valids] = pred.predict({pc,t});
+	taken = preds.fo1().get();
+	valid = valids.fo1().get();
+	pred_available = true;
+	u64 predtime = 0;
+	for (u64 i=inst_offset(pc); i<lineinst; i++) {
+	  predtime = std::max(predtime,preds[i].time());
+	  predtime = std::max(predtime,valids[i].time());
+	}
+	if (predtime > t) {
+	  u64 latency_ps = predtime - t;
+	  if (latency_ps > max_pred_lat_ps)
+	    max_pred_lat_ps = latency_ps;
+	}
+      }
+
+      assert(valid[inst_offset(pc)]);
+      bool mispredict = is_branch && (is_taken != taken[inst_offset(pc)]);
+      if (mispredict) {
 	nmisp++;
       }
-      pred.update({branch_pc,start_time},{branch_dir,start_time/*FIXME?*/});
-      hcm::panel.next_cycle();
+      if (is_branch) {
+	// immediate update (not realistic)
+	pred.update({pc,t},{is_taken,t},{next_pc,t});
+      }
+
+      bool is_jump = (next_pc != (pc + instbytes));
+      bool line_end = (inst_offset(pc) == (lineinst-1));
+      bool last_pred = line_end || ! valid[inst_offset(pc+instbytes)];
+      bool end_of_trace = (nbranch == trace_length);
+      if (is_jump || line_end || mispredict || last_pred || end_of_trace) {
+	// end of block
+	panel.next_cycle();
+	t += hcm::panel.clock_cycle_ps;
+	ncycle++;
+	pred_available = false; // need new prediction
+      }
     }
   }
 
   ~harcom_superuser()
   {
+    std::cout << "instructions: " << ninst << std::endl;
+    std::cout << "cycles: " << ncycle << std::endl;
     std::cout << "branches: " << nbranch << std::endl;
     std::cout << "mispredicted: " << nmisp << std::endl;
     if (nbranch!=0)
       std::cout << "mispredict ratio: " << f64(nmisp)/nbranch << std::endl;
-    hcm::panel.print();
-    std::cout << "max prediction latency (cycle): " << double(max_pred_lat_ps) / hcm::panel.clock_cycle_ps << std::endl;
+    panel.print();
+    std::cout << "max prediction latency (cycle): " << double(max_pred_lat_ps) / panel.clock_cycle_ps << std::endl;
   }
 };
 

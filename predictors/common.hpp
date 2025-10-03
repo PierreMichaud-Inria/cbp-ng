@@ -38,6 +38,11 @@ struct global_history {
   {
     return h[i];
   }
+
+  void fanout(hardval auto fo)
+  {
+    h.fanout(fo);
+  }
 };
 
 
@@ -59,7 +64,7 @@ struct folded_gh {
   {
     folded.fanout(fo);
   }
-  
+
   template<u64 MAXL>
   void update(global_history<MAXL> &gh, hardval auto ghlen, valtype auto in)
   {
@@ -128,14 +133,13 @@ struct geometric_folds {
       });
     }
   }
-  
+
   void update(valtype auto branchbits)
   {
     // update folds before global history
     branchbits.fanout(hard<NH*NF+1>{});
+    gh.fanout(hard<std::max(u64(2),NF+1)>{});
     static_loop<NH>([&]<u64 I>(){
-      if constexpr (NF>1)
-	gh[HLEN[I]-1].fanout(hard<NF>{});
       static_loop<NF>([&]<u64 J>(){
 	std::get<J>(folds[I]).update(gh,hard<HLEN[I]>{},branchbits);
       });

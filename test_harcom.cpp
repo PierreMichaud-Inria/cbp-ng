@@ -193,6 +193,8 @@ int main()
     EXEC(auto add = [](val<7> x,val<7> y){return x+y;});
     EXEC(arr<val<7>,8> A = {10,3,4,9,2,3,1,11});
     EXEC(scan(A,add).print("","  ",false));
-    std::cout << std::endl;
+    std::cout << "\n\n";
   }
+  EXEC(static_loop<10>([]<int I>(){std::cout<<I;}););
+  std::cout << "\n";
 }

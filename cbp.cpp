@@ -12,9 +12,8 @@ std::vector<synthetic_trace> traces;
 
 int main(int argc, char * argv[])
 {
-  traces.emplace_back(1000,128,1024,5,99,0.0);
-  traces.emplace_back(1000,8,101,5,14,0.001);
-  
+  traces.emplace_back(1000,128,1024,5,103,0.0);
+  traces.emplace_back(1000,8,100,5,101,0.001);
   u64 simlen = 1000000;
   u64 period = simlen / traces.size();
   if (argc>1) {
@@ -26,7 +25,6 @@ int main(int argc, char * argv[])
   if (simlen < period) {
     period = simlen;
   }
-
   for (u64 n=0, t=0; n<simlen; n+=period, t=(t+1)%traces.size()) {
     sim.run(traces[t],period);
   }

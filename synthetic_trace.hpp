@@ -25,11 +25,11 @@ using f64 = double;
 struct synthetic_trace {
   
   static constexpr u64 I = 4; // bytes per instruction
-  static constexpr u64 block_avg = 5; // instructions per branch
+  static constexpr u64 block_avg = 7; // instructions per branch
   static constexpr f64 fwd_fraction = 0.9;
   static constexpr f64 loop_count_median = 8;
   static constexpr f64 loop_count_mode = 4;
-  static constexpr f64 fwd_taken_proba = 0.5;
+  static constexpr f64 fwd_taken_proba = 0.3;
   static constexpr u64 region = 64; // region size (instructions) 
   static constexpr f64 diverge_fraction = 0.3;
   static_assert(block_avg >= 3);
@@ -47,6 +47,7 @@ struct synthetic_trace {
 
   u64 zone_address = 0;
   u64 bi = 0; // current block index
+  u64 pc = 0;
   u64 stats_branch = 0;
   u64 stats_loop = 0;
   std::vector<u64> edge;
@@ -59,7 +60,7 @@ struct synthetic_trace {
     u64 loop_count = 0;
     u64 loop_iter = 0;
     bool bias = 0;
-    
+
     block(synthetic_trace &trace, u64 branchpc, u64 targetaddr)
     {
       branch_addr = branchpc;
@@ -113,6 +114,7 @@ struct synthetic_trace {
     ss.generate(seeds,seeds+NR);
     for (u64 i=0; i<NR; i++) rng[i].seed(seeds[i]);
     zone_address = rng[0]();
+    pc = zone_address;
     generate_edges(rng[0],rng[1]);
     for (u64 i=0; i<footprint-1; i++) {
       if (edge[i]==0) continue;
@@ -174,7 +176,7 @@ struct synthetic_trace {
     os << s << "loop sites fraction: " << loopsites/blocks.size() << std::endl;
     os << s << "loop dynamic fraction: " << f64(stats_loop)/stats_branch << std::endl;
   }
-  
+
   u64 find_block(u64 address) const
   {
     // find the block containing the address
@@ -201,8 +203,8 @@ struct synthetic_trace {
     bool random_flip = noise_dist(rng[0]);
     return b.bias ^ diverge ^ random_flip;
   }
-  
-  auto next()
+
+  auto next_branch(bool byteaddr = true)
   {
     assert(bi < blocks.size());
     block& b = blocks[bi];
@@ -211,7 +213,25 @@ struct synthetic_trace {
     bool branch_taken = branch_dir(b);
     u64 next_addr = (branch_taken)? b.jump_target_addr : b.branch_addr + 1;
     bi = (branch_taken)? b.target_block : bi+1; // next block
-    return std::tuple{b.branch_addr*I, branch_taken, next_addr*I}; // branch trace
+    if (byteaddr) {
+      return std::tuple{b.branch_addr*I, branch_taken, next_addr*I};
+    } else {
+      return std::tuple{b.branch_addr, branch_taken, next_addr};
+    }
+  }
+
+  auto next_instruction()
+  {
+    u64 current_pc = pc;
+    if (pc < blocks[bi].branch_addr) {
+      pc++;
+      return std::tuple{current_pc*I, /*branch*/false, /*taken*/false, /*next pc*/pc*I};
+    } else {
+      // branch
+      auto [branch_pc/*unused*/,branch_taken,next_pc] = next_branch(false);
+      pc = next_pc;
+      return std::tuple{current_pc*I, /*branch*/true, branch_taken, /*next pc*/pc*I};
+    }
   }
 };
 
