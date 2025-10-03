@@ -26,7 +26,7 @@ struct gshare : predictor {
     // function object that tells if the instruction at a given offset is a branch and,
     // if it is one, gives its direction
     auto get_info = [&](u64 offset) {
-      arr<val<1>,lineinst> match_offset = [&](u64 i){return i<update_rank & update_offset[i]==offset;};
+      arr<val<1>,lineinst> match_offset = [&](u64 i){return (i<update_rank) & (update_offset[i]==offset);};
       arr<val<1>,lineinst> dir = [&](u64 i){return match_offset[i] & update_dir[i];};
       return std::tuple {match_offset.fold_or(), dir.fold_or()};
     };
