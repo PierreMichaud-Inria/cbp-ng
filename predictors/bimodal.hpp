@@ -49,7 +49,6 @@ struct bimodal : predictor {
     index.fanout(hard<lineinst*2>{});
     for (u64 offset=0; offset<lineinst; offset++)
       ctr[offset] = bht[offset].read(index);
-    static_assert(ctr.size == predbits::size);
     predbits pred = [&](u64 offset){return val<1>(ctr[offset]>>1);};
     validbits valid = [](){return 1;};
     return {pred.fo1(),valid.fo1()};

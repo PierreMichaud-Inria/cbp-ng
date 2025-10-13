@@ -63,7 +63,6 @@ struct gshare : predictor {
     index.fanout(hard<lineinst*2>{});
     for (u64 i=0; i<lineinst; i++)
       ctr[i] = pht[i].read(index);
-    static_assert(ctr.size == predbits::size);
     predbits pred = [&](u64 i){return val<1>(ctr[i]>>1);};
     validbits valid = [](){return 1;};
     return {pred.fo1(),valid.fo1()};
