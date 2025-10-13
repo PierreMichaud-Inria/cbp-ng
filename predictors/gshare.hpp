@@ -38,7 +38,7 @@ struct gshare : predictor {
       });
     }
     // update the global history with the address of the next block
-    val<1> fall_through = (update_rank==0)? 1 : ~update_dir[update_rank-1];
+    val<1> fall_through = (update_rank==0)? val<1>{1} : ~update_dir[update_rank-1];
     val<GHIST> fall_through_inst = concat(lineaddr+1,val<loglineinst>{0});
     val<GHIST> target_inst = (update_rank==0)? val<GHIST>{0} : update_nextinst[update_rank-1];
     val<GHIST> next_inst = select(fall_through,fall_through_inst,target_inst);
@@ -49,7 +49,11 @@ struct gshare : predictor {
   pred_output predict(val<64> inst_pc)
   {
     // once per cycle
-    update_cycle();
+    static bool first_cycle = true;
+    if (! first_cycle) {
+      update_cycle();
+    }
+    first_cycle = false;
     lineaddr = inst_pc.fo1() >> loglinebytes;
     if constexpr (GHIST <= indexbits) {
       index = lineaddr ^ (ghist << (indexbits-GHIST));

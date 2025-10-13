@@ -66,7 +66,7 @@ public:
 
       // one instruction per iteration
       auto [pc, is_branch, is_taken, next_pc] = next_instruction(trace);
- 
+
       if (! pred_available) {
 	// get predictions for new block
 	auto [preds,valids] = pred.predict({pc,t});
@@ -74,7 +74,7 @@ public:
 	valid = valids.fo1().get();
 	pred_available = true;
 	u64 predtime = 0;
-	for (u64 i=inst_offset(pc); i<lineinst; i++) {
+	for (u64 i=0; i<lineinst; i++) {
 	  predtime = std::max(predtime,preds[i].time());
 	  predtime = std::max(predtime,valids[i].time());
 	}

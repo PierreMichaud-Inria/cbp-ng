@@ -3179,7 +3179,7 @@ namespace hcm {
 
   // ######################################################
   // FOR CONDITIONAL EXECUTION
-  
+
   inline class exec_control {
     template<u64,arith> friend class val;
     template<u64,arith> friend class reg;
@@ -3192,11 +3192,20 @@ namespace hcm {
   private:
     bool active = true;
     u64 time = 0;
+    u64 location = 0;
     exec_control(const exec_control &s) = default;
     exec_control& operator=(const exec_control &s) = default;
-    void set_state(bool cond, u64 t=0) {active = cond; time = t;}
+
+    void set_state(bool cond, u64 t=0, u64 l=0)
+    {
+      active = cond;
+      time = t;
+      location = l;
+    }
+
+    auto to_val() const; // defined after class val
   public:
-    exec_control() : active(true), time(0) {}
+    exec_control() : active(true), time(0), location(0) {}
   } exec;
 
   
@@ -3666,6 +3675,7 @@ namespace hcm {
     template<memdatatype,u64> friend class ram;
     template<valtype,u64> friend class rom;
     friend class proxy;
+    friend class exec_control;
     friend class ::harcom_superuser;
     template<valtype U, action A> friend auto execute_if(U&&,const A&);
 
@@ -3753,10 +3763,12 @@ namespace hcm {
       return old_data;
     }
 
+#ifndef CHEATING_MODE
     u64 time() const
     {
       return std::max(exec.time,timing);
     }
+#endif
 
     u64 site() const
     {
@@ -3983,6 +3995,11 @@ namespace hcm {
 
 #ifdef CHEATING_MODE
     operator T() {return data;}
+
+    u64 time() const
+    {
+      return std::max(exec.time,timing);
+    }
 #endif
 
     static constexpr T maxval = []() {
@@ -4142,7 +4159,6 @@ namespace hcm {
     [[nodiscard]] arr<val,M> replicate(hard<M>) & // lvalue
     {
       // only the user knows the actual fanout (>=M) and can set it
-      static_assert(M>=2,"replicate means multiple copies");
       return arr<val,M> {[&](){return *this;}};
     }
 
@@ -4150,8 +4166,7 @@ namespace hcm {
     [[nodiscard]] arr<val,M> replicate(hard<M>) && // rvalue
     {
       // the user cannot set the fanout (rvalue), but the fanout is known
-      static_assert(M>=2,"replicate means multiple copies");
-      fanout(hard<M>{});
+      if constexpr (M>1) fanout(hard<M>{});
       auto [v,t] = std::move(*this).get_vt();
       return arr<val,M> {[&](){return val{v,t,site()};}};
     }
@@ -4185,6 +4200,13 @@ namespace hcm {
     }    
   };
 
+  
+  // ######################################################
+
+  auto exec_control::to_val() const
+  {
+    return val<1>(active,time,location);
+  }
 
   // ######################################################
 
@@ -4502,7 +4524,12 @@ namespace hcm {
       if (! panel.arr_of_regs_ctor)
 	last_write_cycle = panel.cycle;
       t += panel.connect_delay(loc,val<N,T>::site(),val<N,T>::size);
-      val<N,T>::set_time(t);
+      if (t < exec.time) {
+	// exec.time is not null,  we are inside an execute_if
+	val<N,T>::set_time(exec.time);
+      } else {
+	val<N,T>::set_time(t);
+      }
       // location is fixed
       if (exec.active) {
 	val<N,T>::data = val<N,T>::fit(v);
@@ -5301,7 +5328,7 @@ namespace hcm {
 	std::cerr << "out-of-bounds RAM read (N=" << N << "; addr=" << va << ")" << std::endl;
 	std::terminate();
       }
-      T readval = (exec.active)? data[va] : T{};
+      T readval = (exec.active)? T{data[va]} : T{};
       readval.set_time(t);
       readval.set_location(ramid);
       return readval;
@@ -5974,11 +6001,15 @@ namespace hcm {
   {
     // the delay/energy for gating the execution is not modeled (TODO?)
     static_assert(std::unsigned_integral<base<T>>);
+    constexpr u64 N = valt<T>::size;
     auto prev_exec = exec;
-    auto [vm,tm,lm] = proxy::get_vtl(std::forward<T>(mask)); // lm not used (FIXME?)
-    for (u64 i=0; i<mask.size; i++) {
+    // nesting execute_ifs increases the predicate's delay
+    auto prev_cond = exec.to_val().replicate(hard<N>{}).concat();
+    auto cond_mask = prev_cond.fo1() & std::forward<T>(mask);
+    auto [vm,tm,lm] = proxy::get_vtl(cond_mask.fo1());
+    for (u64 i=0; i<N; i++) {
       bool cond = (vm>>i) & 1;
-      exec.set_state(cond,tm);
+      exec.set_state(cond,tm,lm);
       // we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<A>) {
@@ -5997,18 +6028,21 @@ namespace hcm {
     // the delay/energy for gating the execution is not modeled (TODO?)
     static_assert(valtype<return_type<A>>);
     static_assert(std::unsigned_integral<base<T>>);
-    constexpr u64 N = valt<T>::size;//mask.size;
+    constexpr u64 N = valt<T>::size;
     using rtype = valt<return_type<A>>;
     // return 0 if the condition is false (AND gate)
     constexpr circuit gate = AND<2> * rtype::size;
     constexpr circuit buf = buffer(AND<2>.ci*rtype::size,false);
     constexpr circuit out = buf + gate;
     auto prev_exec = exec;
-    auto [vm,tm,lm] = proxy::get_vtl(std::forward<T>(mask)); // lm not used (FIXME?)
+    // nesting execute_ifs increases the predicate's delay
+    auto prev_cond = exec.to_val().replicate(hard<N>{}).concat();
+    auto cond_mask = prev_cond.fo1() & std::forward<T>(mask);
+    auto [vm,tm,lm] = proxy::get_vtl(cond_mask.fo1());
     arr<rtype,N> result;
     for (u64 i=0; i<N; i++) {
       bool cond = (vm>>i) & 1;
-      exec.set_state(cond,tm);
+      exec.set_state(cond,tm,lm);
       // we execute the action even when the condition is false
       // (otherwise, this primitive could be used to leak any bit)
       if constexpr (std::invocable<A>) {

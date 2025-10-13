@@ -31,22 +31,26 @@ struct bimodal : predictor {
     for (u64 offset=0; offset<lineinst; offset++) {
       auto [is_branch,dir] = get_info(offset);
       execute_if(is_branch,[&](){
-	bht[offset].write(index,update_ctr(ctr[offset],dir));
+        bht[offset].write(index,update_ctr(ctr[offset],dir));
       });
     }
     update_rank = 0; // done
   }
-  
+
   pred_output predict(val<64> inst_pc)
   {
     // once per cycle
-    update_cycle();
+    static bool first_cycle = true;
+    if (! first_cycle) {
+      update_cycle();
+    }
+    first_cycle = false;
     index = inst_pc.fo1() >> loglinebytes;
     index.fanout(hard<lineinst*2>{});
-    for (u64 i=0; i<lineinst; i++)
-      ctr[i] = bht[i].read(index);
+    for (u64 offset=0; offset<lineinst; offset++)
+      ctr[offset] = bht[offset].read(index);
     static_assert(ctr.size == predbits::size);
-    predbits pred = [&](u64 i){return val<1>(ctr[i]>>1);};
+    predbits pred = [&](u64 offset){return val<1>(ctr[offset]>>1);};
     validbits valid = [](){return 1;};
     return {pred.fo1(),valid.fo1()};
   }

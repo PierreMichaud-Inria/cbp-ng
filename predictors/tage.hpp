@@ -65,7 +65,7 @@ struct tage : predictor {
 
   zone UPDATE_ONLY;
   ram<val<1>,(1<<LOGG)> ubit[NUMG] {"U BITS"}; // "useful" bits
-  
+
   // simulation artifacts (hardware cost may not be real)
   u64 update_rank = 0;
   arr<reg<loglineinst>,lineinst> update_offset; // line offset of each branch in the block
@@ -200,7 +200,6 @@ struct tage : predictor {
   void update_cycle()
   {
     // executed once per cycle
-
     prediction.fanout(hard<2>{});
     bindex.fanout(hard<lineinst>{});
     gindex.fanout(hard<3>{});
