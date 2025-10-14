@@ -2901,6 +2901,9 @@ namespace hcm {
     return pseudo_rom(data,OUTCAP);
   }
 
+  template<u64 OUTPUTS>
+  inline constexpr circuit decoder = decode2(OUTPUTS,OUTCAP);
+
 
   // ######################################################
   // FOR FLORPLANNING (one rectangle per RAM)
@@ -3208,7 +3211,7 @@ namespace hcm {
     exec_control() : active(true), time(0), location(0) {}
   } exec;
 
-  
+
   // ######################################################
   // COUNTERS (STATISTICS)
   
@@ -3633,7 +3636,7 @@ namespace hcm {
   // ######################################################
   // REGION (cont'd)
 
-  region::region() : ramid(panel.rams.size())
+  inline region::region() : ramid(panel.rams.size())
   {
     if (panel.floorplan.placed) {
       std::cerr << "region cannot be defined after floorplanning" << std::endl;
@@ -3644,7 +3647,7 @@ namespace hcm {
     panel.enter_region(this,true);
   }
 
-  void region::enter()
+  inline void region::enter()
   {
     panel.enter_region(this,false);
   }
@@ -3813,11 +3816,12 @@ namespace hcm {
       constexpr u64 mask = (W==64)? -1 : (u64(1)<<W)-1;
       constexpr u64 M = (N+W-1)/W;
       auto [v,t] = vt;
+      auto l = site();
       return arr<val<W>,M> {
 	[&](){
 	  T vv = v;
 	  v >>= W;
-	  return val<W>{vv&mask,t,site()};
+	  return val<W>{vv&mask,t,l};
 	}
       };
     }
@@ -3854,6 +3858,20 @@ namespace hcm {
       u64 y = v & (v^(v-1));
       panel.update_logic(site(),c);
       return {y,t+c.delay(),site()};
+    }
+
+    auto decode(const std::tuple<T,u64> &vt)
+    {
+      static_assert(std::unsigned_integral<T>,"decode() applies to unsigned int");
+      constexpr u64 outputs = u64(1) << N;
+      constexpr circuit c = decoder<outputs>;
+      panel.update_logic(site(),c);
+      auto [v,t] = vt;
+      auto l = site();
+      t += c.delay();
+      return arr<val<1>,outputs> {
+	[&](u64 i){return val<1>{i==v,t,l};}
+      };
     }
 
     template<memdatatype U, u64 M>
@@ -4143,6 +4161,16 @@ namespace hcm {
       return one_hot(std::move(*this).get_vt());
     }
 
+    [[nodiscard]] auto decode() & // lvalue
+    {
+      return decode(get_vt());
+    }
+
+    [[nodiscard]] auto decode() && // rvalue
+    {
+      return decode(std::move(*this).get_vt());
+    }
+
     template<memdatatype U, u64 M>
     [[nodiscard]] val connect(const ram<U,M> &dest) & // lvalue
     {
@@ -4203,7 +4231,7 @@ namespace hcm {
   
   // ######################################################
 
-  auto exec_control::to_val() const
+  inline auto exec_control::to_val() const
   {
     return val<1>(active,time,location);
   }

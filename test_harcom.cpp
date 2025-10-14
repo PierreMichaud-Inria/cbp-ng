@@ -124,7 +124,9 @@ int main()
     EXEC(y.rotate_left(-1).printb("rotate right: ","\n",false));
     EXEC(y.one_hot().printb("one hot: ","\n",false));
     EXEC(y.replicate(hard<3>{}).printb("","\n",false));
-    EXEC(y.ones().print("bit count: ","\n\n",false));
+    EXEC(y.ones().print("bit count: ","\n",false));
+    EXEC(val<4> z=3;);
+    EXEC(z.decode().concat().printb("","\n\n",false));
   }
   {
     hsu.next_cycle();
@@ -195,6 +197,15 @@ int main()
     EXEC(scan(A,add).print("","  ",false));
     std::cout << "\n\n";
   }
-  EXEC(static_loop<10>([]<int I>(){std::cout<<I;}););
-  std::cout << "\n";
+  {
+    EXEC(static_loop<10>([]<int I>(){std::cout<<I;}););
+    std::cout << "\n";
+  }
+  {
+#ifdef CHEATING_MODE
+    std::cout << "\n";
+    EXEC(val<4> x=3);
+    EXEC(assert(x==3));
+#endif
+  }
 }
