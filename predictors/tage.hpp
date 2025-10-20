@@ -67,12 +67,12 @@ struct tage : predictor {
   ram<val<1>,(1<<LOGG)> ubit[NUMG] {"U BITS"}; // "useful" bits
 
   // simulation artifacts (hardware cost may not be real)
-  u64 update_rank = 0;
-  arr<reg<loglineinst>,lineinst> update_offset; // line offset of each branch in the block
-  arr<reg<1>,lineinst> update_dir; // direction of each branch in the block
-  arr<reg<PATHBITS>,lineinst> update_nextinst; // next inst address of each branch in the block
+  u64 num_branch = 0;
+  arr<reg<loglineinst>,lineinst> branch_offset; // line offset of each branch in the block
+  arr<reg<1>,lineinst> branch_dir; // direction of each branch in the block
+  arr<reg<PATHBITS>,lineinst> branch_nextinst; // next inst address of each branch in the block
   arr<reg<lineinst>,lineinst> update_mask; // for each offset, which branch of the block has that offset
-  arr<reg<1>,lineinst> update_last_branch; // the 1 bit tells the offset of the last branch in the block
+  arr<reg<1>,lineinst> last_branch; // the 1 bit tells the offset of the last branch in the block
   reg<loglineinst> last_offset; // line offset of last branch in the block
   reg<1> last_dir; // direction of last branch in the block
   reg<PATHBITS> target_inst; // bits to inject in path history if block exits with jump
@@ -90,22 +90,9 @@ struct tage : predictor {
     std::cout << std::endl;
   }
 
-
   pred_output predict(val<64> inst_pc)
   {
     // executed once per cycle
-    static bool first_cycle = true;
-
-    // do buffered updates
-    if (! first_cycle) {
-      execute_if(val<1>{update_rank!=0}, [&](){
-	update_cycle();
-	update_cycle_history();
-      });
-    }
-    first_cycle = false;
-    update_rank = 0;
-
     lineaddr = inst_pc.fo1() >> loglinebytes;
     lineaddr.fanout(hard<1+NUMG*2>{});
     gfolds.fanout(hard<2>{});
@@ -196,10 +183,22 @@ struct tage : predictor {
     return {prediction,valid.fo1()};
   }
 
+  void update(val<64> branch_pc, val<1> dir, val<64> next_pc)
+  {
+    // on every conditional branch (update buffered)
+    assert(num_branch < lineinst);
+    branch_offset[num_branch] = branch_pc.fo1() >> loginstbytes;
+    branch_dir[num_branch] = dir.fo1();
+    branch_nextinst[num_branch] = next_pc.fo1() >> loginstbytes;
+    num_branch++;
+  }
 
   void update_cycle()
   {
     // executed once per cycle
+    if (num_branch == 0) {
+      return;
+    }
     prediction.fanout(hard<2>{});
     bindex.fanout(hard<lineinst>{});
     gindex.fanout(hard<3>{});
@@ -212,29 +211,24 @@ struct tage : predictor {
     match2.fanout(hard<2>{});
     pred1.fanout(hard<2>{});
     pred2.fanout(hard<2+NUMG>{});
-    update_offset.fanout(hard<lineinst+NUMG+1>{});
-    update_dir.fanout(hard<3>{});
-    update_nextinst.fanout(hard<2>{});
+    branch_offset.fanout(hard<lineinst+NUMG+1>{});
+    branch_dir.fanout(hard<3>{});
+    branch_nextinst.fanout(hard<2>{});
     lineaddr.fanout(hard<2>{});
     gfolds.fanout(hard<2>{});
 #ifdef USE_META
     meta.fanout(hard<2>{});
     newly_alloc.fanout(hard<2>{});
 #endif
-    u64 update_valid = (u64(1)<<update_rank)-1;
+    u64 update_valid = (u64(1)<<num_branch)-1;
 
-    if (update_rank==0) {
-      last_offset = lineinst-1;
-      last_dir = 0;
-    } else {
-      last_offset = update_offset[update_rank-1];
-      last_dir = update_dir[update_rank-1];
-    }
+    last_offset = branch_offset[num_branch-1];
+    last_dir = branch_dir[num_branch-1];
     last_dir.fanout(hard<2>{});
     last_offset.fanout(hard<lineinst+4*NUMG>{});
 
     static_loop<lineinst>([&]<u64 offset>{
-      arr<val<1>,lineinst> match_offset = [&](u64 i){return update_offset[i] == hard<offset>{};};
+      arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == hard<offset>{};};
       update_mask[offset] = match_offset.fo1().concat() & update_valid;
     });
     update_mask.fanout(hard<2>{});
@@ -244,20 +238,20 @@ struct tage : predictor {
     };
     is_branch.fanout(hard<3>{});
 
-    val<lineinst> actualdirs = update_dir.concat();
+    val<lineinst> actualdirs = branch_dir.concat();
     actualdirs.fanout(hard<lineinst+NUMG>{});
 
-    arr<val<1>,lineinst> branch_dir = [&](u64 offset){
+    arr<val<1>,lineinst> branch_taken = [&](u64 offset){
       return (actualdirs & update_mask[offset]) != hard<0>{};
     };
-    branch_dir.fanout(hard<2>{});
+    branch_taken.fanout(hard<2>{});
 
     // at most one branch, the last one, can be mispredicted (as a misprediction ends a block)
     static_loop<lineinst>([&]<u64 offset>{
-      update_last_branch[offset] = (last_offset == hard<offset>{});
+      last_branch[offset] = (last_offset == hard<offset>{});
     });
-    update_last_branch.fanout(hard<2>{});
-    val<1> last_pred = ((update_last_branch.concat() & prediction.concat()) != hard<0>{});
+    last_branch.fanout(hard<2>{});
+    val<1> last_pred = ((last_branch.concat() & prediction.concat()) != hard<0>{});
     val<1> mispred = (last_pred.fo1() != last_dir);
     mispred.fanout(hard<2*NUMG+1>{});
 
@@ -269,7 +263,7 @@ struct tage : predictor {
     };
     arr<val<2,i64>,lineinst> meta_incr = [&](u64 offset) -> val<2,i64> {
       val<1> update_meta = is_branch[offset] & altdiff[offset].fo1() & newly_alloc[offset];
-      val<1> bad_pred2 = (pred2[offset] != branch_dir[offset]);
+      val<1> bad_pred2 = (pred2[offset] != branch_taken[offset]);
       return select(update_meta.fo1(),concat(bad_pred2.fo1(),val<1>{1}),val<2>{0});
     };
     for (u64 i=METAPIPE-1; i!=0; i--) {
@@ -307,7 +301,7 @@ struct tage : predictor {
     for (u64 offset=0; offset<lineinst; offset++) {
       val<1> bim_primary = match1[offset] >> NUMG;
       execute_if(is_branch[offset] & bim_primary.fo1(), [&](){
-	bim[offset].write(bindex, update_ctr(readb[offset],branch_dir[offset]));
+	bim[offset].write(bindex, update_ctr(readb[offset],branch_taken[offset]));
       });
     }
 
@@ -316,7 +310,7 @@ struct tage : predictor {
       val<loglineinst> tag_offset = readt[i] >> HTAGBITS;
       val<loglineinst> offset = select(allocate[i],last_offset,tag_offset.fo1());
       offset.fanout(hard<lineinst>{});
-      arr<val<1>,lineinst> match_offset = [&](u64 j){return update_offset[j] == offset;};
+      arr<val<1>,lineinst> match_offset = [&](u64 j){return branch_offset[j] == offset;};
       return (match_offset.fo1().concat() & update_valid & actualdirs) != hard<0>{};
     };
     bdir.fanout(hard<2>{});
@@ -362,7 +356,6 @@ struct tage : predictor {
       val<1> newu = select(allocate[i] | uclear[i].fo1(), val<1>{0}, goodpred[i].fo1());
       ubit[i].write(gindex[i],newu.fo1());
     });
-
 #ifdef RESET_UBITS
     uctr.fanout(hard<3>{});
     val<NUMG> allocmask1  = collamask1.reverse();
@@ -373,32 +366,15 @@ struct tage : predictor {
     uctr = select(~mispred,uctr,select(uctrsat,val<decltype(uctr)::size>{0},update_ctr(uctr,faralloc.fo1())));
     execute_if(uctrsat,[&](){for (auto &uram : ubit) uram.reset();});
 #endif
-  }
-
-  void update_cycle_history()
-  {
     // update global history and folds with the address of the next block
     lineaddr.fanout(hard<2>{});
     last_dir.fanout(hard<2>{});
-    if (update_rank == 0) {
-      target_inst = 0;
-    } else {
-      target_inst = update_nextinst[update_rank-1];
-    }
+    target_inst = branch_nextinst[num_branch-1];
     target_inst.fanout(hard<2>{});
     val<PATHBITS> fall_through_inst = concat(val<PATHBITS-loglineinst>{lineaddr}+1,val<loglineinst>{0});
     val<PATHBITS> next_inst = select(~last_dir,fall_through_inst.fo1(),target_inst);
     gfolds.update(next_inst.fo1());
-  }
-  
-  void update(val<64> branch_pc, val<1> dir, val<64> next_pc)
-  {
-    // on every conditional branch (update buffered)
-    assert(update_rank < lineinst);
-    update_offset[update_rank] = branch_pc.fo1() >> loginstbytes;
-    update_dir[update_rank] = dir.fo1();
-    update_nextinst[update_rank] = next_pc.fo1() >> loginstbytes;
-    update_rank++;
+    num_branch = 0; // done
   }
 
 };

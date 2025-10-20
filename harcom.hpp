@@ -3254,14 +3254,24 @@ namespace hcm {
     global<u64> storage;
     global<u64> storage_sram;
     global<f64> energy_fJ;
+    global<u64> xtors_this_cycle;
+    global<u64> fins_this_cycle;
     global<u64> transistors;
     global<u64> xtor_fins;
-    global<f64> area_sram_mm2;    
+    global<f64> area_sram_mm2;
 
     void update_xtors(u64 xtors, u64 fins)
     {
-      transistors += xtors;
-      xtor_fins += fins;
+      xtors_this_cycle += xtors;
+      fins_this_cycle += fins;
+    }
+
+    void update_transistors()
+    {
+      transistors = std::max(transistors,xtors_this_cycle);
+      xtor_fins = std::max(xtor_fins,fins_this_cycle);
+      xtors_this_cycle = 0;
+      fins_this_cycle = 0;
     }
 
     void update_storage(u64 nbits, bool is_sram)
@@ -3339,6 +3349,9 @@ namespace hcm {
 	std::cerr << "clock cycle must be non-null" << std::endl;
 	std::terminate();
       }
+      for (const auto &r : regions) {
+	r->update_transistors();
+      }
       cycle++;
     }
 
@@ -3404,8 +3417,7 @@ namespace hcm {
     void update_logic(u64 locus, const circuit &c, bool actual = exec.active)
     {
       region *r = get_region(locus);
-      if (cycle == first_cycle)
-	r->update_xtors(c.t,c.f);
+      r->update_xtors(c.t,c.f);
       if (actual)
 	r->update_energy(c.e);      
     }
@@ -3449,12 +3461,10 @@ namespace hcm {
       } else {
 	// make_floorplan() must have been called
 	connection &c =  connect[index(srcid,dstid)];
-	if (cycle == first_cycle) {
-	  region *rs = get_region(srcid);
-	  region *rd = get_region(dstid);
-	  region *r = (rs==rd)? rs : &default_region;	  
-	  r->update_xtors(nbits*c.one_wire.t, nbits*c.one_wire.f);
-	}
+	region *rs = get_region(srcid);
+	region *rd = get_region(dstid);
+	region *r = (rs==rd)? rs : &default_region;	  
+	r->update_xtors(nbits*c.one_wire.t, nbits*c.one_wire.f);
 	if (exec.active) {
 	  c.use += nbits; // for energy calculation (deferred)
 	}
@@ -3537,19 +3547,35 @@ namespace hcm {
 
     auto transistors(region &r = default_region)
     {
-      if (&r == &default_region) {
-	return total_cost(&region::transistors);
+      if (cycle == first_cycle) {
+	if (&r == &default_region) {
+	  return total_cost(&region::xtors_this_cycle);
+	} else {
+	  return r.xtors_this_cycle;
+	}
       } else {
-	return r.transistors;
+	if (&r == &default_region) {
+	  return total_cost(&region::transistors);
+	} else {
+	  return r.transistors;
+	}
       }
     }
 
     auto xtor_fins(region &r = default_region)
     {
-      if (&r == &default_region) {
-	return total_cost(&region::xtor_fins);
+      if (cycle == first_cycle) {
+	if (&r == &default_region) {
+	  return total_cost(&region::fins_this_cycle);
+	} else {
+	  return r.fins_this_cycle;
+	}
       } else {
-	return r.xtor_fins;
+	if (&r == &default_region) {
+	  return total_cost(&region::xtor_fins);
+	} else {
+	  return r.xtor_fins;
+	}
       }
     }
 
@@ -3613,7 +3639,7 @@ namespace hcm {
       xtors.print("transistors: ",os);
       if (xtors != 0)
         os << "fins/transistor: " << f64(xtor_fins(r)) / xtors << std::endl;
-      area_sram_mm2(r).print("SRAM area (mm2): ");
+      area_sram_mm2(r).print("SRAM area (mm2): ",os);
       if (cycle == first_cycle) {
         energy_fJ(r).print("dynamic energy (fJ): ",os);
       } else if (clock_cycle_ps != 0) {
