@@ -11,9 +11,11 @@ struct bimodal : predictor {
   ram<val<2>,(1<<indexbits)> bht[lineinst];
   reg<indexbits> index;
   arr<reg<2>,lineinst> ctr;
+
+  // simulation artifacts (hardware cost may not be real)
+  u64 num_branch = 0;
   arr<reg<loglineinst>,lineinst> branch_offset;
   arr<reg<1>,lineinst> branch_dir;
-  u64 num_branch = 0; // no hardware cost (simulation artifact)
 
   pred_output predict(val<64> inst_pc)
   {
@@ -32,40 +34,37 @@ struct bimodal : predictor {
     // on every conditional branch
     // update will be done in the next cycle, along with other updates in same line
     assert(num_branch < lineinst);
-    branch_offset[num_branch] = branch_pc >> loginstbytes;
-    branch_dir[num_branch] = dir;
+    branch_offset[num_branch] = branch_pc.fo1() >> loginstbytes;
+    branch_dir[num_branch] = dir.fo1();
     num_branch++;
   }
-
-  val<2> get_branch_info(u64 offset)
-  {
-    // tells if the instruction at a given offset is a conditional branch
-    // and gives its direction    
-    arr<val<1>,lineinst> match_offset = [&](u64 i){
-      return (i<num_branch) & (branch_offset[i]==offset);
-    };
-    arr<val<1>,lineinst> dir = [&](u64 i){
-      return match_offset[i] & branch_dir[i];
-    };
-    val<1> is_branch = match_offset.fold_or();
-    val<1> is_taken = dir.fold_or();
-    return concat(is_branch.fo1(),is_taken.fo1());
-  };
 
   void update_cycle()
   {
     // once per cycle
+    if (num_branch == 0) {
+      return;
+    }
     branch_offset.fanout(hard<lineinst>{});
     branch_dir.fanout(hard<lineinst>{});
-    arr<val<2>,lineinst> branch = [&](u64 offset){
-      return get_branch_info(offset);
+    u64 update_valid = (u64(1)<<num_branch)-1;
+    arr<val<lineinst>,lineinst> update_mask = [&](u64 offset){
+      arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == offset;};
+      return match_offset.fo1().concat() & update_valid;
     };
-    for (u64 i=0; i<lineinst; i++) {
-      auto [is_branch,dir] = split<1,1>(branch[i].fo1());
-      execute_if(is_branch.fo1(),[&](){
-        bht[i].write(index,update_ctr(ctr[i],dir.fo1()));
-      });
-    }
+    update_mask.fanout(hard<2>{});
+    arr<val<1>,lineinst> is_branch = [&](u64 offset){
+      return update_mask[offset] != hard<0>{};
+    };
+    val<lineinst> actualdirs = branch_dir.concat();
+    actualdirs.fanout(hard<lineinst>{});
+    arr<val<1>,lineinst> branch_taken = [&](u64 offset){
+      return (actualdirs & update_mask[offset]) != hard<0>{};
+    };
+    // update predictor here
+    execute_if(is_branch.fo1().concat(), [&](u64 i){
+      bht[i].write(index,update_ctr(ctr[i],branch_taken[i].fo1()));
+    });
     num_branch = 0; // done
   }
 };

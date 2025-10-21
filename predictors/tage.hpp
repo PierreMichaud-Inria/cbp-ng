@@ -71,11 +71,6 @@ struct tage : predictor {
   arr<reg<loglineinst>,lineinst> branch_offset; // line offset of each branch in the block
   arr<reg<1>,lineinst> branch_dir; // direction of each branch in the block
   arr<reg<PATHBITS>,lineinst> branch_nextinst; // next inst address of each branch in the block
-  arr<reg<lineinst>,lineinst> update_mask; // for each offset, which branch of the block has that offset
-  arr<reg<1>,lineinst> last_branch; // the 1 bit tells the offset of the last branch in the block
-  reg<loglineinst> last_offset; // line offset of last branch in the block
-  reg<1> last_dir; // direction of last branch in the block
-  reg<PATHBITS> target_inst; // bits to inject in path history if block exits with jump
 
   tage()
   {
@@ -196,6 +191,7 @@ struct tage : predictor {
   void update_cycle()
   {
     // executed once per cycle
+    // at most one branch, the last one, can be mispredicted (as a misprediction ends a block)
     if (num_branch == 0) {
       return;
     }
@@ -222,15 +218,15 @@ struct tage : predictor {
 #endif
     u64 update_valid = (u64(1)<<num_branch)-1;
 
-    last_offset = branch_offset[num_branch-1];
-    last_dir = branch_dir[num_branch-1];
+    val<loglineinst> last_offset = branch_offset[num_branch-1];
+    last_offset.fanout(hard<4*NUMG+1>{});
+    val<1> last_dir = branch_dir[num_branch-1];
     last_dir.fanout(hard<2>{});
-    last_offset.fanout(hard<lineinst+4*NUMG>{});
 
-    static_loop<lineinst>([&]<u64 offset>{
-      arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == hard<offset>{};};
-      update_mask[offset] = match_offset.fo1().concat() & update_valid;
-    });
+    arr<val<lineinst>,lineinst> update_mask = [&](u64 offset){
+      arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == offset;};
+      return match_offset.fo1().concat() & update_valid;
+    };
     update_mask.fanout(hard<2>{});
 
     arr<val<1>,lineinst> is_branch = [&](u64 offset){
@@ -246,12 +242,7 @@ struct tage : predictor {
     };
     branch_taken.fanout(hard<2>{});
 
-    // at most one branch, the last one, can be mispredicted (as a misprediction ends a block)
-    static_loop<lineinst>([&]<u64 offset>{
-      last_branch[offset] = (last_offset == hard<offset>{});
-    });
-    last_branch.fanout(hard<2>{});
-    val<1> last_pred = ((last_branch.concat() & prediction.concat()) != hard<0>{});
+    val<1> last_pred = ((last_offset.decode().concat() & prediction.concat()) != hard<0>{});
     val<1> mispred = (last_pred.fo1() != last_dir);
     mispred.fanout(hard<2*NUMG+1>{});
 
@@ -368,11 +359,9 @@ struct tage : predictor {
 #endif
     // update global history and folds with the address of the next block
     lineaddr.fanout(hard<2>{});
-    last_dir.fanout(hard<2>{});
-    target_inst = branch_nextinst[num_branch-1];
-    target_inst.fanout(hard<2>{});
+    val<PATHBITS> target_inst = branch_nextinst[num_branch-1];
     val<PATHBITS> fall_through_inst = concat(val<PATHBITS-loglineinst>{lineaddr}+1,val<loglineinst>{0});
-    val<PATHBITS> next_inst = select(~last_dir,fall_through_inst.fo1(),target_inst);
+    val<PATHBITS> next_inst = select(~last_dir,fall_through_inst.fo1(),target_inst.fo1());
     gfolds.update(next_inst.fo1());
     num_branch = 0; // done
   }
