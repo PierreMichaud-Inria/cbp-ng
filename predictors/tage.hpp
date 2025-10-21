@@ -59,18 +59,18 @@ struct tage : predictor {
   reg<UCTRBITS> uctr; // u bits counter (reset u bits when counter saturates)
 #endif
 
+  // simulation artifacts (hardware cost may not be real)
+  u64 num_branch = 0;
+  arr<reg<loglineinst>,lineinst> branch_offset; // line offset of each branch in the block
+  arr<reg<1>,lineinst> branch_dir; // direction of each branch in the block
+  arr<reg<PATHBITS>,lineinst> branch_nextinst; // next inst address of each branch in the block
+
   ram<val<TAGW>,(1<<LOGG)> gtag[NUMG] {"TAGS"}; // global tables tags
   ram<val<CTR>,(1<<LOGG)> gctr[NUMG] {"3-BIT CTRS"}; // global tables counters
   ram<val<2>,(1<<BINDEXBITS)> bim[lineinst] {"2-BIT CTRS"}; // bimodal table
 
   zone UPDATE_ONLY;
   ram<val<1>,(1<<LOGG)> ubit[NUMG] {"U BITS"}; // "useful" bits
-
-  // simulation artifacts (hardware cost may not be real)
-  u64 num_branch = 0;
-  arr<reg<loglineinst>,lineinst> branch_offset; // line offset of each branch in the block
-  arr<reg<1>,lineinst> branch_dir; // direction of each branch in the block
-  arr<reg<PATHBITS>,lineinst> branch_nextinst; // next inst address of each branch in the block
 
   tage()
   {

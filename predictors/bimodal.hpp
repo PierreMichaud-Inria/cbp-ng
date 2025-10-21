@@ -8,7 +8,7 @@ template<u64 LOGN>
 struct bimodal : predictor {
   static_assert(LOGN > loglineinst);
   static constexpr u64 indexbits = LOGN-loglineinst;
-  ram<val<2>,(1<<indexbits)> bht[lineinst];
+
   reg<indexbits> index;
   arr<reg<2>,lineinst> ctr;
 
@@ -16,6 +16,8 @@ struct bimodal : predictor {
   u64 num_branch = 0;
   arr<reg<loglineinst>,lineinst> branch_offset;
   arr<reg<1>,lineinst> branch_dir;
+
+  ram<val<2>,(1<<indexbits)> bht[lineinst];
 
   pred_output predict(val<64> inst_pc)
   {
@@ -46,7 +48,7 @@ struct bimodal : predictor {
       return;
     }
     branch_offset.fanout(hard<lineinst>{});
-    branch_dir.fanout(hard<lineinst>{});
+    branch_dir.fanout(hard<2>{});
     u64 update_valid = (u64(1)<<num_branch)-1;
     arr<val<lineinst>,lineinst> update_mask = [&](u64 offset){
       arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == offset;};
