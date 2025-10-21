@@ -166,7 +166,7 @@ struct tage : predictor {
     metasign.fanout(hard<lineinst>{});
     for (u64 offset=0; offset<lineinst; offset++) {
       newly_alloc[offset] = (match1[offset] & coldctr) != hard<0>{};
-      newly_alloc.fanout(hard<2>{});
+      newly_alloc[offset].fanout(hard<2>{});
       arr<val<1>,3> altselconds = {metasign, newly_alloc[offset], match2[offset]!=hard<0>{}};
       prediction[offset] = select(altselconds.fo1().fold_and(),pred2[offset],pred1[offset]);
     }
@@ -214,7 +214,6 @@ struct tage : predictor {
     gfolds.fanout(hard<2>{});
 #ifdef USE_META
     meta.fanout(hard<2>{});
-    newly_alloc.fanout(hard<2>{});
 #endif
     u64 update_valid = (u64(1)<<num_branch)-1;
 
