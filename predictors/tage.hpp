@@ -63,7 +63,6 @@ struct tage : predictor {
   u64 num_branch = 0;
   arr<reg<loglineinst>,lineinst> branch_offset; // line offset of each branch in the block
   arr<reg<1>,lineinst> branch_dir; // direction of each branch in the block
-  arr<reg<PATHBITS>,lineinst> branch_nextinst; // next inst address of each branch in the block
 
   ram<val<TAGW>,(1<<LOGG)> gtag[NUMG] {"TAGS"}; // global tables tags
   ram<val<CTR>,(1<<LOGG)> gctr[NUMG] {"3-BIT CTRS"}; // global tables counters
@@ -178,25 +177,23 @@ struct tage : predictor {
     return {prediction,valid.fo1()};
   }
 
-  void update(val<64> branch_pc, val<1> dir, val<64> next_pc)
+  void update(val<64> branch_pc, val<1> dir, [[maybe_unused]] val<64> next_pc)
   {
     // on every conditional branch (update buffered)
     assert(num_branch < lineinst);
     branch_offset[num_branch] = branch_pc.fo1() >> loginstbytes;
     branch_dir[num_branch] = dir.fo1();
-    branch_nextinst[num_branch] = next_pc.fo1() >> loginstbytes;
     num_branch++;
   }
 
-  void update_cycle([[maybe_unused]] val<1> mispredict)
+  void update_cycle(val<1> mispredict, val<64> next_pc)
   {
     // executed once per cycle
     // at most one branch, the last one, can be mispredicted (as a misprediction ends a block)
     if (num_branch == 0) {
       execute_if(~true_block,[&](){
 	// previous block ended prematurely because of a mispredicted not-taken branch
-	val<PATHBITS> fallthru_inst = concat(val<PATHBITS>{lineaddr}+1,val<loglineinst>{0});
-	gfolds.update(fallthru_inst.fo1());
+	gfolds.update(val<PATHBITS>{next_pc.fo1()>>loginstbytes});
 	true_block = 1;
       });
       return; // stop here
@@ -217,8 +214,7 @@ struct tage : predictor {
     pred1.fanout(hard<2>{});
     pred2.fanout(hard<2+NUMG>{});
     branch_offset.fanout(hard<lineinst+NUMG+1>{});
-    branch_dir.fanout(hard<3>{});
-    branch_nextinst.fanout(hard<2>{});
+    branch_dir.fanout(hard<2>{});
     lineaddr.fanout(hard<2>{});
     gfolds.fanout(hard<2>{});
 #ifdef USE_META
@@ -335,7 +331,7 @@ struct tage : predictor {
     // associate to each global table a bit telling if prediction for this branch is correct
     arr<val<1>,NUMG> goodpred = [&](u64 i){
       val<loglineinst> tag_offset = readt[i] >> HTAGBITS;
-      return select(tag_offset.fo1()==last_offset, correct_pred, val<1>{1});
+      return (tag_offset.fo1() != last_offset) | correct_pred;
     };
 
     // update the u bits
@@ -363,11 +359,7 @@ struct tage : predictor {
     // update global history if this is a true block
     true_block = correct_pred | branch_dir[num_branch-1] | (last_offset == hard<lineinst-1>{});
     execute_if(true_block, [&](){
-      lineaddr.fanout(hard<2>{});
-      val<PATHBITS> target_inst = branch_nextinst[num_branch-1];
-      val<PATHBITS> fallthru_inst = concat(val<PATHBITS>{lineaddr}+1,val<loglineinst>{0});
-      val<PATHBITS> next_inst = select(branch_dir[num_branch-1],target_inst.fo1(),fallthru_inst.fo1());
-      gfolds.update(next_inst.fo1());
+      gfolds.update(val<PATHBITS>{next_pc.fo1()>>loginstbytes});
     });
     num_branch = 0; // done
   }

@@ -12,7 +12,6 @@ struct gshare : predictor {
   reg<GHIST> ghist;
   reg<1> true_block;
   reg<indexbits> index;
-  reg<std::max(indexbits,GHIST)> lineaddr;
   arr<reg<2>,lineinst> ctr;
   arr<reg<1>,lineinst> prediction; // final prediction for each offset
   
@@ -20,14 +19,13 @@ struct gshare : predictor {
   u64 num_branch = 0;
   arr<reg<loglineinst>,lineinst> branch_offset;
   arr<reg<1>,lineinst> branch_dir;
-  arr<reg<GHIST>,lineinst> branch_nextinst;
 
   ram<val<2>,(1<<indexbits)> pht[lineinst];
 
   pred_output predict(val<64> inst_pc)
   {
     // once per cycle
-    lineaddr = inst_pc.fo1() >> loglinebytes;
+    val<std::max(indexbits,GHIST)> lineaddr = inst_pc.fo1() >> loglinebytes;
     if constexpr (GHIST <= indexbits) {
       index = lineaddr ^ (ghist << (indexbits-GHIST));
     } else {
@@ -46,25 +44,23 @@ struct gshare : predictor {
     return {prediction,valid.fo1()};
   }
 
-  void update(val<64> branch_pc, val<1> dir, val<64> next_pc)
+  void update(val<64> branch_pc, val<1> dir, [[maybe_unused]] val<64> next_pc)
   {
     // on every conditional branch
     // update will be done in the next cycle, along with other updates in same line
     assert(num_branch < lineinst);
     branch_offset[num_branch] = branch_pc.fo1() >> loginstbytes;
     branch_dir[num_branch] = dir.fo1();
-    branch_nextinst[num_branch] = next_pc.fo1() >> loginstbytes;
     num_branch++;
   }
 
-  void update_cycle([[maybe_unused]] val<1> mispredict)
+  void update_cycle(val<1> mispredict, val<64> next_pc)
   {
     // once per cycle
     if (num_branch == 0) {
       execute_if(~true_block,[&](){
 	// previous block ended prematurely because of a mispredicted not-taken branch
-	val<GHIST> fallthru_inst = concat(val<GHIST>{lineaddr}+1,val<loglineinst>{0});
-	ghist = (ghist << 1) ^ fallthru_inst.fo1();
+	ghist = (ghist<<1) ^ val<GHIST>{next_pc.fo1()>>loginstbytes};
 	true_block = 1;
       });
       return; // stop here
@@ -99,10 +95,7 @@ struct gshare : predictor {
 
     // update the global history if this is a true block
     execute_if(true_block, [&](){
-      val<GHIST> fallthru_inst = concat(val<GHIST>{lineaddr}+1,val<loglineinst>{0});
-      val<GHIST> target_inst = branch_nextinst[num_branch-1];
-      val<GHIST> next_inst = select(branch_dir[num_branch-1],target_inst.fo1(),fallthru_inst.fo1());
-      ghist = (ghist << 1) ^ next_inst;
+      ghist = (ghist<<1) ^ val<GHIST>{next_pc.fo1()>>loginstbytes};
     });
     num_branch = 0; // done
   }
