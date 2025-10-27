@@ -201,6 +201,9 @@ struct tage : predictor {
       });
       return; // stop here
     }
+    mispredict.fanout(hard<NUMG+1>{});
+    val<1> correct_pred = ~mispredict;
+    correct_pred.fanout(hard<NUMG+2>{});
     prediction.fanout(hard<2>{});
     bindex.fanout(hard<lineinst>{});
     gindex.fanout(hard<3>{});
@@ -224,9 +227,7 @@ struct tage : predictor {
     u64 update_valid = (u64(1)<<num_branch)-1;
 
     val<loglineinst> last_offset = branch_offset[num_branch-1];
-    last_offset.fanout(hard<4*NUMG+2>{});
-    val<1> last_dir = branch_dir[num_branch-1];
-    last_dir.fanout(hard<2>{});
+    last_offset.fanout(hard<4*NUMG+1>{});
 
     arr<val<lineinst>,lineinst> update_mask = [&](u64 offset){
       arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == offset;};
@@ -246,10 +247,6 @@ struct tage : predictor {
       return (actualdirs & update_mask[offset]) != hard<0>{};
     };
     branch_taken.fanout(hard<2>{});
-
-    val<1> last_pred = ((last_offset.decode().concat() & prediction.concat()) != hard<0>{});
-    val<1> mispred = (last_pred.fo1() != last_dir);
-    mispred.fanout(hard<2*NUMG+1>{});
 
 #ifdef USE_META
     // update meta counter
@@ -272,7 +269,7 @@ struct tage : predictor {
 #endif
 
     // select some candidate entries for allocation
-    val<NUMG> mispmask = mispred.replicate(hard<NUMG>{}).concat();
+    val<NUMG> mispmask = mispredict.replicate(hard<NUMG>{}).concat();
     arr<val<1>,NUMG> last_tagcmp = [&](int i){return readt[i] == concat(last_offset,htag[i]);};
     val<NUMG+1> last_match1 = last_tagcmp.fo1().append(1).concat().one_hot();
     last_match1.fanout(hard<2>{});
@@ -338,7 +335,7 @@ struct tage : predictor {
     // associate to each global table a bit telling if prediction for this branch is correct
     arr<val<1>,NUMG> goodpred = [&](u64 i){
       val<loglineinst> tag_offset = readt[i] >> HTAGBITS;
-      return select(tag_offset.fo1()==last_offset, ~mispred, val<1>{1});
+      return select(tag_offset.fo1()==last_offset, correct_pred, val<1>{1});
     };
 
     // update the u bits
@@ -359,17 +356,17 @@ struct tage : predictor {
     val<1> faralloc = (((last_match1>>3) | allocmask1).one_hot() ^ allocmask1) == hard<0>{};
     val<1> uctrsat = (uctr == hard<decltype(uctr)::maxval>{});
     uctrsat.fanout(hard<2>{});
-    uctr = select(~mispred,uctr,select(uctrsat,val<decltype(uctr)::size>{0},update_ctr(uctr,faralloc.fo1())));
+    uctr = select(correct_pred,uctr,select(uctrsat,val<decltype(uctr)::size>{0},update_ctr(uctr,faralloc.fo1())));
     execute_if(uctrsat,[&](){for (auto &uram : ubit) uram.reset();});
 #endif
-    
+
     // update global history if this is a true block
-    true_block = ~mispredict.fo1() | branch_dir[num_branch-1] | (last_offset == hard<lineinst-1>{});
+    true_block = correct_pred | branch_dir[num_branch-1] | (last_offset == hard<lineinst-1>{});
     execute_if(true_block, [&](){
       lineaddr.fanout(hard<2>{});
       val<PATHBITS> target_inst = branch_nextinst[num_branch-1];
       val<PATHBITS> fallthru_inst = concat(val<PATHBITS>{lineaddr}+1,val<loglineinst>{0});
-      val<PATHBITS> next_inst = select(last_dir,target_inst.fo1(),fallthru_inst.fo1());
+      val<PATHBITS> next_inst = select(branch_dir[num_branch-1],target_inst.fo1(),fallthru_inst.fo1());
       gfolds.update(next_inst.fo1());
     });
     num_branch = 0; // done
