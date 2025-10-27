@@ -41,7 +41,7 @@ struct bimodal : predictor {
     num_branch++;
   }
 
-  void update_cycle()
+  void update_cycle([[maybe_unused]] val<1> mispredict)
   {
     // once per cycle
     if (num_branch == 0) {

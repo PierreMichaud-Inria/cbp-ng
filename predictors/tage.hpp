@@ -23,13 +23,13 @@ struct tage : predictor {
 #ifdef USE_META
   static constexpr u64 METAPIPE = 2;
 #endif
-  static_assert(PATHBITS > loglineinst);
   static_assert(LOGB > loglineinst);
   static constexpr u64 BINDEXBITS = LOGB-loglineinst;
   static_assert(TAGW > loglineinst); // the unhashed line offset is part of the tag
   static constexpr u64 HTAGBITS = TAGW-loglineinst; // hashed tag bits
 
   geometric_folds<NUMG,MINHIST,GHIST,LOGG,HTAGBITS> gfolds;
+  reg<1> true_block;
 
   reg<64-loglineinst> lineaddr;
   reg<BINDEXBITS> bindex; // bimodal table index 
@@ -188,12 +188,18 @@ struct tage : predictor {
     num_branch++;
   }
 
-  void update_cycle()
+  void update_cycle([[maybe_unused]] val<1> mispredict)
   {
     // executed once per cycle
     // at most one branch, the last one, can be mispredicted (as a misprediction ends a block)
     if (num_branch == 0) {
-      return;
+      execute_if(~true_block,[&](){
+	// previous block ended prematurely because of a mispredicted not-taken branch
+	val<PATHBITS> fallthru_inst = concat(val<PATHBITS>{lineaddr}+1,val<loglineinst>{0});
+	gfolds.update(fallthru_inst.fo1());
+	true_block = 1;
+      });
+      return; // stop here
     }
     prediction.fanout(hard<2>{});
     bindex.fanout(hard<lineinst>{});
@@ -218,7 +224,7 @@ struct tage : predictor {
     u64 update_valid = (u64(1)<<num_branch)-1;
 
     val<loglineinst> last_offset = branch_offset[num_branch-1];
-    last_offset.fanout(hard<4*NUMG+1>{});
+    last_offset.fanout(hard<4*NUMG+2>{});
     val<1> last_dir = branch_dir[num_branch-1];
     last_dir.fanout(hard<2>{});
 
@@ -356,12 +362,16 @@ struct tage : predictor {
     uctr = select(~mispred,uctr,select(uctrsat,val<decltype(uctr)::size>{0},update_ctr(uctr,faralloc.fo1())));
     execute_if(uctrsat,[&](){for (auto &uram : ubit) uram.reset();});
 #endif
-    // update global history and folds with the address of the next block
-    lineaddr.fanout(hard<2>{});
-    val<PATHBITS> target_inst = branch_nextinst[num_branch-1];
-    val<PATHBITS> fall_through_inst = concat(val<PATHBITS-loglineinst>{lineaddr}+1,val<loglineinst>{0});
-    val<PATHBITS> next_inst = select(~last_dir,fall_through_inst.fo1(),target_inst.fo1());
-    gfolds.update(next_inst.fo1());
+    
+    // update global history if this is a true block
+    true_block = ~mispredict.fo1() | branch_dir[num_branch-1] | (last_offset == hard<lineinst-1>{});
+    execute_if(true_block, [&](){
+      lineaddr.fanout(hard<2>{});
+      val<PATHBITS> target_inst = branch_nextinst[num_branch-1];
+      val<PATHBITS> fallthru_inst = concat(val<PATHBITS>{lineaddr}+1,val<loglineinst>{0});
+      val<PATHBITS> next_inst = select(last_dir,target_inst.fo1(),fallthru_inst.fo1());
+      gfolds.update(next_inst.fo1());
+    });
     num_branch = 0; // done
   }
 

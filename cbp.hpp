@@ -27,7 +27,7 @@ struct predictor {
   using pred_output = std::tuple<predbits,validbits>;
   virtual pred_output predict(val<64> inst_pc) = 0;
   virtual void update(val<64> branch_pc, val<1> dir, val<64> next_pc) = 0;
-  virtual void update_cycle() = 0;
+  virtual void update_cycle(val<1> mispredict) = 0;
 };
 
 
@@ -102,7 +102,7 @@ public:
       bool end_of_trace = (nbranch == trace_length);
       if (is_jump || line_end || mispredict || last_pred || end_of_trace) {
 	// end of block
-	pred.update_cycle();
+	pred.update_cycle({mispredict,t});
 	panel.next_cycle();
 	t += hcm::panel.clock_cycle_ps;
 	ncycle++;
