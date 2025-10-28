@@ -16,4 +16,4 @@ FLAGS="-Wall -Wextra -pedantic -Wold-style-cast -Werror -Wno-deprecated-declarat
 
 set -x
 
-$COMPILE -o $NAME $FILE $OPT $FLAGS $EXTRA
+$COMPILE -o $NAME $FILE -lz $OPT $FLAGS $EXTRA

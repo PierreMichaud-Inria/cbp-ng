@@ -1,0 +1,18 @@
+#!/bin/bash
+
+EXEC="$1"
+TRACEFILE="$2"
+OUTDIR="$3"
+
+if [ "$OUTDIR" == "" ]; then
+    OUTDIR="."
+fi
+
+WARMINST=0
+SIMINST=10000000
+
+FILENAME=$(basename "$TRACEFILE")
+FILENAME="${FILENAME%.*}"
+NAME="${FILENAME%_trace}"
+
+./$EXEC $TRACEFILE $NAME $WARMINST $SIMINST > $OUTDIR/$NAME.out

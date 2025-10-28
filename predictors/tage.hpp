@@ -1,20 +1,19 @@
-#include <cstdlib>
+// this is a basic TAGE, not necessarily well optimized
+#define USE_META
+#define RESET_UBITS
+
 #include "../harcom.hpp"
 #include "common.hpp"
 
 using namespace hcm;
 
-// this is a basic TAGE, not necessarily well optimized
-
-
-#define USE_META
-#define RESET_UBITS
-
-
-template<u64 NUMG, u64 LOGG, u64 LOGB, u64 TAGW, u64 GHIST>
+template<u64 NUMG, u64 LOGG, u64 LOGB, u64 TAGW, u64 GHIST, u64 LOGLB>
 struct tage : predictor {
+  // provides 2^(LOGLB-2) predictions per cycle
+  static_assert(LOGLB>2);
+  static constexpr u64 LOGP1 = 12;
   static constexpr u64 CTR = 3;
-  static constexpr u64 MINHIST = 3;
+  static constexpr u64 MINHIST = 2;
   static constexpr u64 WEAK1 = 1<<(CTR-1);
   static constexpr u64 WEAK0 = WEAK1-1;
   static constexpr u64 METABITS = 4;
@@ -23,77 +22,120 @@ struct tage : predictor {
 #ifdef USE_META
   static constexpr u64 METAPIPE = 2;
 #endif
-  static_assert(LOGB > loglineinst);
-  static constexpr u64 BINDEXBITS = LOGB-loglineinst;
-  static_assert(TAGW > loglineinst); // the unhashed line offset is part of the tag
-  static constexpr u64 HTAGBITS = TAGW-loglineinst; // hashed tag bits
+  static constexpr u64 LOGLINEINST = LOGLB-2;
+  static constexpr u64 LINEINST = 1<<LOGLINEINST;
+  static_assert(LOGP1 > LOGLINEINST);
+  static_assert(LOGB > LOGLINEINST);
+  static constexpr u64 index1_bits = LOGP1-LOGLINEINST;
+  static constexpr u64 bindex2_bits = LOGB-LOGLINEINST;
+  static_assert(TAGW > LOGLINEINST); // the unhashed line offset is part of the tag
+  static constexpr u64 HTAGBITS = TAGW-LOGLINEINST; // hashed tag bits
 
   geometric_folds<NUMG,MINHIST,GHIST,LOGG,HTAGBITS> gfolds;
-  reg<1> true_block;
+  reg<1> true_block = 1;
+  
+  // for P1
+  reg<index1_bits> index1;
+  arr<reg<2>,LINEINST> readb1; // read P1 bimodal counters for each offset
+  reg<LINEINST> p1; // P1 predictions
 
-  reg<64-loglineinst> lineaddr;
-  reg<BINDEXBITS> bindex; // bimodal table index 
+  // for P2
+  reg<bindex2_bits> bindex2; // bimodal table index 
   arr<reg<LOGG>,NUMG> gindex; // global tables indexes
   arr<reg<HTAGBITS>,NUMG> htag; // computed hashed tags
 
-  arr<reg<2>,lineinst> readb; // read bimodal counters for each offset
+  arr<reg<2>,LINEINST> readb2; // read P2 bimodal counters for each offset
   arr<reg<TAGW>,NUMG> readt; // read tags
   arr<reg<CTR>,NUMG> readc; // read global counters
   arr<reg<1>,NUMG> readu; // read u bits
   reg<NUMG> notumask; // read u bits, inverted
 
-  arr<reg<NUMG+1>,lineinst> match; // all matches for each offset
-  arr<reg<NUMG+1>,lineinst> match1; // longest match for each offset
-  arr<reg<NUMG+1>,lineinst> match2; // second longest match for each offset
+  arr<reg<NUMG+1>,LINEINST> match; // all matches for each offset
+  arr<reg<NUMG+1>,LINEINST> match1; // longest match for each offset
+  arr<reg<NUMG+1>,LINEINST> match2; // second longest match for each offset
 
-  arr<reg<1>,lineinst> pred1; // primary prediction for each offset
-  arr<reg<1>,lineinst> pred2; // alternate prediction for each offset
-  arr<reg<1>,lineinst> prediction; // final prediction for each offset
+  arr<reg<1>,LINEINST> pred1; // primary P2 prediction for each offset
+  arr<reg<1>,LINEINST> pred2; // alternate P2 prediction for each offset
+  reg<LINEINST> p2; // final P2 predictions
 
 #ifdef USE_META
   arr<reg<METABITS,i64>,METAPIPE> meta; // select between pred1 and pred2
-  arr<reg<1>,lineinst> newly_alloc;
+  arr<reg<1>,LINEINST> newly_alloc;
 #endif
 
 #ifdef RESET_UBITS
   reg<UCTRBITS> uctr; // u bits counter (reset u bits when counter saturates)
 #endif
 
-  // simulation artifacts (hardware cost may not be real)
+  // simulation artifacts, hardware cost may not be real
   u64 num_branch = 0;
-  arr<reg<loglineinst>,lineinst> branch_offset; // line offset of each branch in the block
-  arr<reg<1>,lineinst> branch_dir; // direction of each branch in the block
+  u64 block_size = 0;
+  arr<reg<LOGLINEINST>,LINEINST> branch_offset;
+  arr<reg<1>,LINEINST> branch_dir;
+  reg<LINEINST> block_entry; // one-hot vector
 
+  // P1 (bimodal)
+  ram<val<2>,(1<<index1_bits)> table1[LINEINST];
+  
+  // P2 (TAGE)
   ram<val<TAGW>,(1<<LOGG)> gtag[NUMG] {"TAGS"}; // global tables tags
   ram<val<CTR>,(1<<LOGG)> gctr[NUMG] {"3-BIT CTRS"}; // global tables counters
-  ram<val<2>,(1<<BINDEXBITS)> bim[lineinst] {"2-BIT CTRS"}; // bimodal table
+  ram<val<2>,(1<<bindex2_bits)> bim[LINEINST] {"2-BIT CTRS"}; // bimodal table
 
   zone UPDATE_ONLY;
   ram<val<1>,(1<<LOGG)> ubit[NUMG] {"U BITS"}; // "useful" bits
 
   tage()
   {
+#ifdef VERBOSE
+    std::cerr << "TAGE history lengths: ";
+    for (u64 i=0; i<NUMG; i++) std::cerr << gfolds.HLEN[i] << " ";
+    std::cerr << std::endl;
     if (LOGG == HTAGBITS) {
-      std::cout << "WARNING: the tag function and index function are not different enough\n";
+      std::cerr << "WARNING: the tag function and index function are not different enough\n";
     }
-    std::cout << "TAGE global entries: " << NUMG << " x " << (1<<LOGG) << std::endl;
-    std::cout << "TAGE bimodal entries: " << (1<<LOGB) << std::endl;
-    std::cout << "TAGE global entry tag length: " << TAGW << std::endl;
-    std::cout << "TAGE history lengths: ";
-    for (u64 i=0; i<NUMG; i++) std::cout << gfolds.HLEN[i] << " ";
-    std::cout << std::endl;
+#endif
+  }
+  
+  void new_block(val<64> inst_pc)
+  {
+    val<LOGLINEINST> offset = inst_pc.fo1() >> 2;
+    block_entry = offset.fo1().decode().concat();
+    block_entry.fanout(hard<LINEINST*2>{});
+    block_size = 1;
   }
 
-  pred_output predict(val<64> inst_pc)
+  val<1> predict1([[maybe_unused]] val<64> inst_pc)
   {
-    // executed once per cycle
-    lineaddr = inst_pc.fo1() >> loglinebytes;
+    inst_pc.fanout(hard<2>{});
+    new_block(inst_pc);
+    index1 = inst_pc >> LOGLB;
+    index1.fanout(hard<LINEINST>{});
+    for (u64 offset=0; offset<LINEINST; offset++) {
+      readb1[offset] = table1[offset].read(index1);
+    }
+    readb1.fanout(hard<2>{});
+    p1 = arr<val<1>,LINEINST>{[&](u64 offset){
+      return readb1[offset] >> 1;
+    }}.concat();
+    p1.fanout(hard<LINEINST>{});
+    return (block_entry & p1) != hard<0>{};
+  };
+
+  val<1> reuse_predict1([[maybe_unused]] val<64> inst_pc)
+  {
+    return ((block_entry<<block_size) & p1) != hard<0>{};
+  };
+
+  val<1> predict2(val<64> inst_pc)
+  {
+    val<std::max(bindex2_bits,LOGG)> lineaddr = inst_pc.fo1() >> LOGLB;
     lineaddr.fanout(hard<1+NUMG*2>{});
     gfolds.fanout(hard<2>{});
 
     // compute indexes and hashed tags
-    bindex = lineaddr;
-    bindex.fanout(hard<lineinst>{});
+    bindex2 = lineaddr;
+    bindex2.fanout(hard<LINEINST>{});
     for (u64 i=0; i<NUMG; i++) {
       gindex[i] = lineaddr ^ gfolds.template get<0>(i);
       htag[i] = val<HTAGBITS>{lineaddr}.reverse() ^ gfolds.template get<1>(i);
@@ -102,16 +144,16 @@ struct tage : predictor {
     htag.fanout(hard<2>{});
 
     // read tables
-    for (u64 offset=0; offset<lineinst; offset++) {
-      readb[offset] = bim[offset].read(bindex);
+    for (u64 offset=0; offset<LINEINST; offset++) {
+      readb2[offset] = bim[offset].read(bindex2);
     }
-    readb.fanout(hard<2>{});
+    readb2.fanout(hard<2>{});
     for (u64 i=0; i<NUMG; i++) {
       readt[i] = gtag[i].read(gindex[i]);
       readc[i] = gctr[i].read(gindex[i]);
       readu[i] = ubit[i].read(gindex[i]);
     }
-    readt.fanout(hard<lineinst+1>{});
+    readt.fanout(hard<LINEINST+1>{});
     readc.fanout(hard<3>{});
     readu.fanout(hard<2>{});
     notumask = ~readu.concat();
@@ -120,38 +162,38 @@ struct tage : predictor {
     // gather prediction bits for each offset
     arr<val<1>,NUMG> gpreds_split = [&](int i) {return val<1>{readc[i]>>(CTR-1)};};
     val<NUMG> gpreds = gpreds_split.fo1().concat();
-    gpreds.fanout(hard<lineinst>{});
-    arr<val<NUMG+1>,lineinst> preds = [&](u64 offset){return concat(val<1>{readb[offset]>>1},gpreds);};
-    preds.fanout(hard<2*lineinst>{});
+    gpreds.fanout(hard<LINEINST>{});
+    arr<val<NUMG+1>,LINEINST> preds = [&](u64 offset){return concat(val<1>{readb2[offset]>>1},gpreds);};
+    preds.fanout(hard<2*LINEINST>{});
 
     // hashed tags comparisons
     arr<val<1>,NUMG> htagcmp_split = [&](int i){return val<HTAGBITS>{readt[i]} == htag[i];};
     val<NUMG> htagcmp = htagcmp_split.fo1().concat();
-    htagcmp.fanout(hard<lineinst>{});
+    htagcmp.fanout(hard<LINEINST>{});
 
     // generate match mask for each offset
-    static_loop<lineinst>([&]<u64 offset>(){
-      arr<val<1>,NUMG> tagcmp = [&](int i){return val<loglineinst>{readt[i]>>HTAGBITS} == hard<offset>{};};
+    static_loop<LINEINST>([&]<u64 offset>(){
+      arr<val<1>,NUMG> tagcmp = [&](int i){return val<LOGLINEINST>{readt[i]>>HTAGBITS} == hard<offset>{};};
       match[offset] = concat(val<1>{1}, tagcmp.fo1().concat() & htagcmp); // bimodal is default when no match
     });
     match.fanout(hard<2>{});
 
     // for each offset, find longest match and select primary prediction
-    for (u64 offset=0; offset<lineinst; offset++) {
+    for (u64 offset=0; offset<LINEINST; offset++) {
       match1[offset] = match[offset].one_hot();
     }
     match1.fanout(hard<3>{});
-    for (u64 offset=0; offset<lineinst; offset++) {
+    for (u64 offset=0; offset<LINEINST; offset++) {
       pred1[offset] = (match1[offset] & preds[offset]) != hard<0>{};
     }
     pred1.fanout(hard<2>{});
 
     // for each offset, find second longest match and select secondary prediction
-    for (u64 offset=0; offset<lineinst; offset++) {
+    for (u64 offset=0; offset<LINEINST; offset++) {
       match2[offset] = (match[offset]^match1[offset]).one_hot();
     }
     match2.fanout(hard<2>{});
-    for (u64 offset=0; offset<lineinst; offset++) {
+    for (u64 offset=0; offset<LINEINST; offset++) {
       pred2[offset] = (match2[offset] & preds[offset]) != hard<0>{};
     }
     pred2.fanout(hard<2>{});
@@ -160,40 +202,56 @@ struct tage : predictor {
     meta.fanout(hard<2>{});
     arr<val<1>,NUMG> weakctr = [&](int i) {return (readc[i]==hard<WEAK0>{}) | (readc[i]==hard<WEAK1>{});};
     val<NUMG> coldctr = notumask & weakctr.fo1().concat();
-    coldctr.fanout(hard<lineinst>{});
+    coldctr.fanout(hard<LINEINST>{});
     val<1> metasign = (meta[METAPIPE-1] >= hard<0>{});
-    metasign.fanout(hard<lineinst>{});
-    for (u64 offset=0; offset<lineinst; offset++) {
+    metasign.fanout(hard<LINEINST>{});
+    for (u64 offset=0; offset<LINEINST; offset++) {
       newly_alloc[offset] = (match1[offset] & coldctr) != hard<0>{};
-      newly_alloc[offset].fanout(hard<2>{});
-      arr<val<1>,3> altselconds = {metasign, newly_alloc[offset], match2[offset]!=hard<0>{}};
-      prediction[offset] = select(altselconds.fo1().fold_and(),pred2[offset],pred1[offset]);
     }
+    newly_alloc.fanout(hard<2>{});
+    arr<val<1>,LINEINST> altsel = [&](u64 offset){
+      arr<val<1>,3> inputs = {metasign, newly_alloc[offset], match2[offset]!=hard<0>{}};
+      return inputs.fo1().fold_and();
+    };
+    p2 = arr<val<1>,LINEINST> {[&](u64 offset){
+      return select(altsel[offset].fo1(),pred2[offset],pred1[offset]);
+    }}.concat();
 #else
-    prediction = pred1;
+    p2 = pred1.concat();
 #endif
-    prediction.fanout(hard<2>{});
-    arr<val<1>,lineinst> valid = [](){return 1;};
-    return {prediction,valid.fo1()};
+    p2.fanout(hard<LINEINST>{});
+    val<1> taken = (block_entry & p2) != hard<0>{};
+    taken.fanout(hard<2>{});
+    reuse_prediction(~val<1>{block_entry>>(LINEINST-1)});
+    return taken;
   }
 
-  void update(val<64> branch_pc, val<1> dir, [[maybe_unused]] val<64> next_pc)
+  val<1> reuse_predict2([[maybe_unused]] val<64> inst_pc)
   {
-    // on every conditional branch (update buffered)
-    assert(num_branch < lineinst);
-    branch_offset[num_branch] = branch_pc.fo1() >> loginstbytes;
-    branch_dir[num_branch] = dir.fo1();
+    val<1> taken = ((block_entry<<block_size) & p2) != hard<0>{};
+    taken.fanout(hard<2>{});
+    reuse_prediction(~val<1>{block_entry>>(LINEINST-1-block_size)});
+    block_size++;
+    return taken;
+  }
+
+  void update_condbr(val<64> branch_pc, val<1> taken, [[maybe_unused]] val<64> next_pc)
+  {
+    assert(num_branch < LINEINST);
+    branch_offset[num_branch] = branch_pc.fo1() >> 2;
+    branch_dir[num_branch] = taken.fo1();
     num_branch++;
   }
 
   void update_cycle(val<1> mispredict, val<64> next_pc)
   {
-    // executed once per cycle
-    // at most one branch, the last one, can be mispredicted (as a misprediction ends a block)
+    // updates for all conditional branches in the predicted block
     if (num_branch == 0) {
-      execute_if(~true_block,[&](){
-	// previous block ended prematurely because of a mispredicted not-taken branch
-	gfolds.update(val<PATHBITS>{next_pc.fo1()>>loginstbytes});
+      // no conditional branch in this block
+      execute_if(~true_block, [&](){
+	// previous block ended on a mispredicted not-taken branch
+	// we are still in the same line, this is the last chunk
+	gfolds.update(val<PATHBITS>{next_pc.fo1()>>2});
 	true_block = 1;
       });
       return; // stop here
@@ -201,11 +259,12 @@ struct tage : predictor {
     mispredict.fanout(hard<NUMG+1>{});
     val<1> correct_pred = ~mispredict;
     correct_pred.fanout(hard<NUMG+2>{});
-    prediction.fanout(hard<2>{});
-    bindex.fanout(hard<lineinst>{});
+    index1.fanout(hard<LINEINST>{});
+    p2.fanout(hard<2>{});
+    bindex2.fanout(hard<LINEINST>{});
     gindex.fanout(hard<3>{});
     htag.fanout(hard<3>{});
-    readb.fanout(hard<2>{});
+    readb2.fanout(hard<2>{});
     readt.fanout(hard<4>{});
     readc.fanout(hard<2>{});
     notumask.fanout(hard<2>{});
@@ -213,44 +272,52 @@ struct tage : predictor {
     match2.fanout(hard<2>{});
     pred1.fanout(hard<2>{});
     pred2.fanout(hard<2+NUMG>{});
-    branch_offset.fanout(hard<lineinst+NUMG+1>{});
+    branch_offset.fanout(hard<LINEINST+NUMG+1>{});
     branch_dir.fanout(hard<2>{});
-    lineaddr.fanout(hard<2>{});
     gfolds.fanout(hard<2>{});
 #ifdef USE_META
     meta.fanout(hard<2>{});
 #endif
-    u64 update_valid = (u64(1)<<num_branch)-1;
-
-    val<loglineinst> last_offset = branch_offset[num_branch-1];
+    val<LOGLINEINST> last_offset = branch_offset[num_branch-1];
     last_offset.fanout(hard<4*NUMG+1>{});
 
-    arr<val<lineinst>,lineinst> update_mask = [&](u64 offset){
-      arr<val<1>,lineinst> match_offset = [&](u64 i){return branch_offset[i] == offset;};
+    u64 update_valid = (u64(1)<<num_branch)-1;
+    arr<val<LINEINST>,LINEINST> update_mask = [&](u64 offset){
+      arr<val<1>,LINEINST> match_offset = [&](u64 i){return branch_offset[i] == offset;};
       return match_offset.fo1().concat() & update_valid;
     };
     update_mask.fanout(hard<2>{});
-
-    arr<val<1>,lineinst> is_branch = [&](u64 offset){
+    
+    arr<val<1>,LINEINST> is_branch = [&](u64 offset){
       return update_mask[offset] != hard<0>{};
     };
-    is_branch.fanout(hard<3>{});
+    is_branch.fanout(hard<4>{});
 
-    val<lineinst> actualdirs = branch_dir.concat();
-    actualdirs.fanout(hard<lineinst+NUMG>{});
+    val<LINEINST> actualdirs = branch_dir.concat();
+    actualdirs.fanout(hard<LINEINST>{});
 
-    arr<val<1>,lineinst> branch_taken = [&](u64 offset){
+    arr<val<1>,LINEINST> branch_taken = [&](u64 offset){
       return (actualdirs & update_mask[offset]) != hard<0>{};
     };
     branch_taken.fanout(hard<2>{});
 
+    // Update P1 with the P2 prediction, not with the actual branch direction
+    auto p2_split = p2.make_array(val<1>{});
+    for (u64 offset=0; offset<LINEINST; offset++) {
+      execute_if(is_branch[offset], [&](){
+	table1[offset].write(index1,update_ctr(readb1[offset],p2_split[offset].fo1()));
+      });
+    }
+
+    // update P2 with the actual branch direction
+
 #ifdef USE_META
     // update meta counter
-    arr<val<1>,lineinst> altdiff = [&](u64 offset){
+    arr<val<1>,LINEINST> altdiff = [&](u64 offset){
       // for each offset, tell if primary and secondary predictions differ
       return (match2[offset] != hard<0>{}) & (pred2[offset] != pred1[offset]);
     };
-    arr<val<2,i64>,lineinst> meta_incr = [&](u64 offset) -> val<2,i64> {
+    arr<val<2,i64>,LINEINST> meta_incr = [&](u64 offset) -> val<2,i64> {
       val<1> update_meta = is_branch[offset] & altdiff[offset].fo1() & newly_alloc[offset];
       val<1> bad_pred2 = (pred2[offset] != branch_taken[offset]);
       return select(update_meta.fo1(),concat(bad_pred2.fo1(),val<1>{1}),val<2>{0});
@@ -287,25 +354,25 @@ struct tage : predictor {
     allocate.fanout(hard<3>{});
 
     // update the bimodal counters that provided a primary prediction
-    for (u64 offset=0; offset<lineinst; offset++) {
+    for (u64 offset=0; offset<LINEINST; offset++) {
       val<1> bim_primary = match1[offset] >> NUMG;
       execute_if(is_branch[offset] & bim_primary.fo1(), [&](){
-	bim[offset].write(bindex, update_ctr(readb[offset],branch_taken[offset]));
+	bim[offset].write(bindex2, update_ctr(readb2[offset],branch_taken[offset]));
       });
     }
 
     // associate a branch direction to each global table
     arr<val<1>,NUMG> bdir = [&](u64 i) {
-      val<loglineinst> tag_offset = readt[i] >> HTAGBITS;
-      val<loglineinst> offset = select(allocate[i],last_offset,tag_offset.fo1());
-      offset.fanout(hard<lineinst>{});
-      arr<val<1>,lineinst> match_offset = [&](u64 j){return branch_offset[j] == offset;};
+      val<LOGLINEINST> tag_offset = readt[i] >> HTAGBITS;
+      val<LOGLINEINST> offset = select(allocate[i],last_offset,tag_offset.fo1());
+      offset.fanout(hard<LINEINST>{});
+      arr<val<1>,LINEINST> match_offset = [&](u64 j){return branch_offset[j] == offset;};
       return (match_offset.fo1().concat() & update_valid & actualdirs) != hard<0>{};
     };
     bdir.fanout(hard<2>{});
     
     // update a global counter if it provided a primary prediction or is in the allocated entry
-    arr<val<NUMG+1>,lineinst> actual_match1 = [&](u64 offset){
+    arr<val<NUMG+1>,LINEINST> actual_match1 = [&](u64 offset){
       return select(is_branch[offset],match1[offset],val<NUMG+1>{0});
     };
     val<NUMG> primarymask = actual_match1.fo1().fold_or();
@@ -324,14 +391,14 @@ struct tage : predictor {
     // associate to each global table a bit telling if local prediction differs from secondary prediction
     arr<val<1>,NUMG> altdiffer = [&](u64 i){
       val<1> thispred = readc[i] >> (CTR-1);
-      val<loglineinst> tag_offset = readt[i] >> HTAGBITS;
+      val<LOGLINEINST> tag_offset = readt[i] >> HTAGBITS;
       return thispred.fo1() != pred2.select(tag_offset.fo1());
     };
 
     // associate to each global table a bit telling if prediction for this branch is correct
     arr<val<1>,NUMG> goodpred = [&](u64 i){
-      val<loglineinst> tag_offset = readt[i] >> HTAGBITS;
-      return (tag_offset.fo1() != last_offset) | correct_pred;
+      val<LOGLINEINST> tag_offset = readt[i] >> HTAGBITS;
+      return (tag_offset.fo1() != last_offset) | correct_pred; 
     };
 
     // update the u bits
@@ -345,6 +412,7 @@ struct tage : predictor {
       val<1> newu = select(allocate[i] | uclear[i].fo1(), val<1>{0}, goodpred[i].fo1());
       ubit[i].write(gindex[i],newu.fo1());
     });
+
 #ifdef RESET_UBITS
     uctr.fanout(hard<3>{});
     val<NUMG> allocmask1  = collamask1.reverse();
@@ -356,12 +424,20 @@ struct tage : predictor {
     execute_if(uctrsat,[&](){for (auto &uram : ubit) uram.reset();});
 #endif
 
-    // update global history if this is a true block
-    true_block = correct_pred | branch_dir[num_branch-1] | (last_offset == hard<lineinst-1>{});
+    // update global history
+    val<1> line_end = block_entry >> (LINEINST-block_size);
+    true_block = correct_pred | branch_dir[num_branch-1] | line_end.fo1();
     execute_if(true_block, [&](){
-      gfolds.update(val<PATHBITS>{next_pc.fo1()>>loginstbytes});
+      gfolds.update(val<PATHBITS>{next_pc.fo1()>>2});
     });
+    
     num_branch = 0; // done
   }
 
+  ~tage()
+  {
+#ifdef VERBOSE
+    panel.print(std::cerr);
+#endif
+  }
 };
