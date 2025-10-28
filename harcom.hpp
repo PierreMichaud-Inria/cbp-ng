@@ -4996,21 +4996,29 @@ namespace hcm {
     }
 
     template<std::convertible_to<valt<T>> U>
-    [[nodiscard]] auto append(U &&x) & // lvalue
+    [[nodiscard]] auto append(U && x) & // lvalue
     {
       return arr<valt<T>,N+1> {
 	[&](u64 i) -> valt<T> {
-	  return (i==N)? std::forward<U>(x) : elem[i];
+	  if (i==N) {
+	    return std::forward<U>(x);
+	  } else {
+	    return elem[i];
+	  }
 	}
       };
     }
 
     template<std::convertible_to<valt<T>> U>
-    [[nodiscard]] auto append(U &&x) && // rvalue
+    [[nodiscard]] auto append(U && x) && // rvalue
     {
       return arr<valt<T>,N+1> {
 	[&](u64 i) -> valt<T> {
-	  return (i==N)? std::forward<U>(x) : elem[i].fo1();
+	  if (i==N) {
+	    return std::forward<U>(x);
+	  } else {
+	    return elem[i].fo1();
+	  }
 	}
       };
     }
