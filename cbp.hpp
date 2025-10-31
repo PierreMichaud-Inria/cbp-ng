@@ -119,7 +119,7 @@ public:
         panel.make_floorplan();
     }
 
-    void run(predictor &p, uint64_t warmup_instructions=0, uint64_t total_instructions=10)
+    void run(predictor &p, uint64_t warmup_instructions=0, uint64_t measurement_instructions=10)
     {
         bool warmed_up = (warmup_instructions==0);
 
@@ -133,7 +133,7 @@ public:
         p.reuse_prediction_callback = rcb;
 
         try {
-            while (ninstr < total_instructions) {
+            while (!warmed_up || ninstr < measurement_instructions) {
                 auto instruction = next_instruction();
                 bool conditional_branch = (instruction.inst_class == INST_CLASS::BR_COND);
                 //bool unconditional_branch = instruction.branch && !conditional_branch;
