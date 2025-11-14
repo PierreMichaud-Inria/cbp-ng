@@ -90,6 +90,7 @@ class harcom_superuser {
     uint64_t p1_p2_disagreements = 0;
     uint64_t extra_cycles = 0;
     double warmup_energy_fJ = 0;
+    bool warmed_up = false;
 
     uint64_t time = 0; // for measuring predictor latencies
     uint64_t max_p1_lat_ps = 0;
@@ -138,7 +139,7 @@ public:
 
     void run(predictor &p, uint64_t warmup_instructions=0, uint64_t measurement_instructions=10)
     {
-        bool warmed_up = (warmup_instructions==0);
+        warmed_up = (warmup_instructions==0);
 
         // Note: reuse_prediction changes values based on callbacks made from
         // within the predictors, so we query and store its value below rather
@@ -228,6 +229,12 @@ public:
 
     ~harcom_superuser()
     {
+        if (!warmed_up) {
+            std::cout << reader.name();
+            std::cout << ",0,0,0,0,0,0,0,0,0" << std::endl;
+            return;
+        }
+
         double p1_latency_cycles = double(max_p1_lat_ps) / cycle_ps;
         double p2_latency_cycles = double(max_p2_lat_ps) / cycle_ps;
         double energy_fJ = panel.energy_fJ() - warmup_energy_fJ; // total correct-path dynamic energy
