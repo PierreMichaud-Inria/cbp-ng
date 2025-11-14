@@ -25,8 +25,8 @@ To simulate all traces:
 To compute the number of mispredictions per instruction:
 ./ratio 2 8 OUTDIR
 
-To compute the average IPC, CPI and EPI:
-./ipc_cpi_epi.py OUTDIR
+To compute the average IPC, CPI, EPI, and other average metrics:
+./predictor_metrics.py OUTDIR
 
 ====================================================================================
 Reference TAGE-SC-L predictor (no timing, no energy):

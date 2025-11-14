@@ -38,6 +38,10 @@ count = 0
 avg_IPC = 0
 avg_CPI = 0
 avg_EPI = 0
+avg_MPI = 0
+avg_DPI = 0
+avg_PPI = 0
+
 for filename in os.listdir(directory):
     if not filename.endswith(".out"):
         continue
@@ -87,9 +91,16 @@ for filename in os.listdir(directory):
         avg_IPC += 1 / IPC # harmonic mean
         avg_CPI += CPI # arithmetic mean
         avg_EPI += EPI # arithmetic mean
+        avg_MPI += MPI
+        avg_DPI += (divergences / instructions)
+        avg_PPI += (pred_cycles / instructions)
 
 avg_IPC = count / avg_IPC
 avg_CPI = avg_CPI / count
 avg_EPI = avg_EPI / count
+avg_MPI = avg_MPI / count
+avg_DPI = avg_DPI / count
+avg_PPI = avg_PPI / count
 
-print(f"{avg_IPC:.6f},{avg_CPI:.6f},{avg_EPI:.6f}")
+#ipc,cpi,epi,mpi,dpi,ppi,p1_latency,p2_latency
+print(f"{avg_IPC:.6f},{avg_CPI:.6f},{avg_EPI:.6f},{avg_MPI:.6f},{avg_DPI:.6f},{avg_PPI:.6f},{p1_latency},{p2_latency}")
