@@ -15,5 +15,5 @@ int main(int argc, char * argv[])
     harcom_superuser sim(reader);
     uint64_t warmup_instructions = std::atoll(argv[3]);
     uint64_t measurement_instructions = std::atoll(argv[4]);
-    sim.run(pred, warmup_instructions, warmup_instructions + measurement_instructions);
+    sim.run(pred, warmup_instructions, measurement_instructions);
 }

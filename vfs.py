@@ -22,7 +22,8 @@ if len(sys.argv) > 1:
 else:
     data = sys.stdin.read().strip()
 
-IPCcbp, CPIcbp, EPIcbp = map(float, data.split(','))
+input_data = list(map(float, data.split(',')))
+IPCcbp, CPIcbp, EPIcbp = input_data[:3]
 
 # wrong-path instructions per correct-path instruction
 WPI0 = IPCcbp0 * CPIcbp0
