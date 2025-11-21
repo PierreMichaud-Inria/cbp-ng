@@ -7,10 +7,11 @@ To compile the default predictor:
 To compile a specific predictor:
 ./compile cbp -DPREDICTOR="gshare<>"
 
-To simulate one trace:
-./cbp cbp6_traces/compress/compress_0_trace.gz compress_0 0 10000000
-or
-./run ./cbp cbp6_traces/compress/compress_0_trace.gz
+To simulate one trace with 1M instructions of warmup and up to 40M instructions
+of measurement:
+./cbp ./gcc_test_trace.gz test 10000000 40000000
+or:
+./run ./cbp ./gcc_test_trace.gz
 
 The simulation output per traces is:
 (1) trace name, (2) instructions, (3) branches, (4) conditional branches, (5) blocks, (6) extra cycles, (7) P1/P2 divergences, (8) P2 mispredictions, (9) P1 latency (cycles), (10) P2 latency (cycles), (11) dynamic energy per instruction (fJ)
