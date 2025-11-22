@@ -9,7 +9,7 @@ To compile a specific predictor:
 
 To simulate one trace with 1M instructions of warmup and up to 40M instructions
 of measurement:
-./cbp ./gcc_test_trace.gz test 10000000 40000000
+./cbp ./gcc_test_trace.gz test 1000000 40000000
 or:
 ./run ./cbp ./gcc_test_trace.gz
 
@@ -36,9 +36,9 @@ To compile:
 g++ -o reference -O3 reference.cpp -lz
 
 To run one trace:
-./reference cbp6_traces/compress/compress_0_trace.gz compress_0 0 10000000
+./reference ./gcc_test_trace.gz compress_0 1000000 40000000
 or
-./run ./reference cbp6_traces/compress/compress_0_trace.gz
+./run ./reference ./gcc_test_trace.gz
 
 To simulate all traces:
 ./run_all ./reference cbp6_traces OUTDIR
