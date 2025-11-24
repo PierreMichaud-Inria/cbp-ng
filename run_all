@@ -5,4 +5,4 @@ TRACEDIR="$2"
 OUTDIR="$3"
 
 mkdir -p ${OUTDIR}
-find "$TRACEDIR/" -name "*_trace.gz" | parallel --use-cores-instead-of-threads run $EXEC {} "$OUTDIR"
+find "$TRACEDIR/" -name "*_trace.gz" | parallel -j 16 --use-cores-instead-of-threads ./run $EXEC {} "$OUTDIR"
