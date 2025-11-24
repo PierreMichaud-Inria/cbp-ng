@@ -7,6 +7,7 @@
 pkgs.mkShell {
   nativeBuildInputs = with pkgs.buildPackages; [
     gcc
+    git
     parallel
     python3
     zlib
