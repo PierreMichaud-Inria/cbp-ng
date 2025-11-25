@@ -122,6 +122,7 @@ class harcom_superuser {
     {
         ninstr = 0;
         nbranch = 0;
+        ncondbr = 0;
         npred = 0;
         mispredictions = 0;
         p1_p2_disagreements = 0;
