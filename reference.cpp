@@ -85,6 +85,7 @@ int main(int argc, char * argv[])
     std::cout << "," << nbranch;
     std::cout << "," << ncondbr;
     std::cout << "," << nblock;//npred;
+    std::cout << "," << 0;//extra_cycles;
     std::cout << "," << 0;//p1_p2_disagreements;
     std::cout << "," << 0;//p1_p2_disagreements_at_block_end;
     std::cout << "," << nmisp;//mispredictions;
