@@ -29,6 +29,12 @@ To compute the number of mispredictions per instruction:
 To compute the average IPC, CPI, EPI, and other average metrics:
 ./predictor_metrics.py OUTDIR
 
+To compute the VFS score for a set of runs:
+./predictor_metrics.py OUTDIR | ./vfs.py
+
+To compute the VFS score for any IPC, CPI, and EPI:
+./vfs.py 7,0.03,1500
+
 ====================================================================================
 Reference TAGE-SC-L predictor (no timing, no energy):
 
