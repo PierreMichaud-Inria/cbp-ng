@@ -1,5 +1,7 @@
+#include "predictors/always_taken.hpp"
 #include "predictors/bimodal.hpp"
 #include "predictors/gshare.hpp"
+#include "predictors/never_taken.hpp"
 #include "predictors/tage.hpp"
 
 #ifdef PREDICTOR
