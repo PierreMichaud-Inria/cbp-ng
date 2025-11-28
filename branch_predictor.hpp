@@ -3,6 +3,7 @@
 #include "predictors/gshare.hpp"
 #include "predictors/never_taken.hpp"
 #include "predictors/tage.hpp"
+#include "predictors/bimodalN.hpp"
 
 #ifdef PREDICTOR
 using branch_predictor = PREDICTOR;

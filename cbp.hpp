@@ -24,9 +24,8 @@ static constexpr uint64_t cycle_ps = 300;
  * called for every instruction, but which method within that level is
  * determined by the predictor itself.
  *
- * The predictor may call the `reuse_prediction()` method from within its
- * *predict* methods with a HARCOM `val<1>`. If the last call to
- * `reuse_prediction()` had a value of 1, the simulator will call
+ * The predictor may call the `reuse_prediction()` with a HARCOM `val<1>`.
+ * If the last call to `reuse_prediction()` had a value of 1, the simulator will call
  * `reuse_predict1` and `reuse_predict2` for the next instruction instead of
  * `predict1` and `predict2`.
  *
@@ -179,7 +178,6 @@ public:
                     p1_result = p.predict1({instruction.pc, time});
                     p2_result = p.predict2({instruction.pc, time});
                 }
-                bool reuse_next_prediction = reuse_prediction;
 
                 auto [prediction1, p1_time] = p1_result.fo1().get_vt();
                 auto [prediction2, p2_time] = p2_result.fo1().get_vt();
@@ -190,6 +188,14 @@ public:
                     max_p2_lat_ps = std::max(max_p2_lat_ps, p2_time-time);
                 }
 
+                // Update the predictor if this was a conditional branch
+                if (conditional_branch) {
+                    p.update_condbr({instruction.pc, time},
+                                    {instruction.taken_branch, time},
+                                    {instruction.next_pc, time});
+                }
+
+                bool reuse_next_prediction = reuse_prediction;
                 bool p2_misprediction = conditional_branch && (prediction2 != instruction.taken_branch);
                 // FIXME: in reality, P1 predicts all instructions, not just branches
                 bool p1_p2_disagreement = conditional_branch && (prediction2 != prediction1);
@@ -201,13 +207,6 @@ public:
                     if (end_of_block) {
                         p1_p2_disagreements_at_block_end++;
                     }
-                }
-
-                // Update the predictor if this was a conditional branch
-                if (conditional_branch) {
-                    p.update_condbr({instruction.pc, time},
-                                    {instruction.taken_branch, time},
-                                    {instruction.next_pc, time});
                 }
 
                 // One block predicted per cycle.
