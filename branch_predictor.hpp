@@ -1,6 +1,7 @@
 #include "predictors/bimodal.hpp"
 #include "predictors/gshare.hpp"
 #include "predictors/tage.hpp"
+#include "predictors/bimodalN.hpp"
 
 #ifdef PREDICTOR
 using branch_predictor = PREDICTOR;
