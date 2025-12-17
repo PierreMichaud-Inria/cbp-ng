@@ -5284,7 +5284,7 @@ namespace hcm {
       valuetype dataval{};
       u64 t{};
 
-      bool operator< (const writeop &rhs) {return t > rhs.t;}
+      bool operator< (const writeop &rhs) const {return t > rhs.t;}
 
       void commit(ram &mem) const
       {
