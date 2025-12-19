@@ -99,7 +99,7 @@ namespace hcm {
   template<typename T>
   struct arraysize_impl {};
 
-  template<typename T, u64 N>
+  template<typename T, std::integral auto N>
   struct arraysize_impl<std::array<T,N>> {
     static constexpr u64 value = N;
   };
@@ -128,7 +128,7 @@ namespace hcm {
   concept valtype = requires(const T &x) {[]<u64 N, arith U>(const val<N,U>&){}(x);};
 
   template<typename T>
-  concept arrayofval = requires(const T &x) {[]<valtype U, u64 N>(const std::array<U,N>&){}(x);};
+  concept arrayofval = requires(const T &x) {[]<valtype U, std::integral auto N>(const std::array<U,N>&){}(x);};
 
   template<valtype T, u64 N> class arr;
 
@@ -506,7 +506,7 @@ namespace hcm {
     }
   }
 
-  template<u64 W, std::unsigned_integral T, u64 N>
+  template<u64 W, std::unsigned_integral T, std::integral auto N>
   auto pack_bits(const std::array<T,N> &in)
   {
     // input array has W-bit elements
@@ -538,7 +538,7 @@ namespace hcm {
     }
   }
 
-  template<u64 W, u64 N>
+  template<u64 W, std::integral auto N>
   auto unpack_bits(const std::array<u64,N> &in)
   {
     // input array has 64-bit elements
@@ -2006,7 +2006,7 @@ namespace hcm {
   }
 
 
-  template<u64 N, u64 M>
+  template<std::integral auto N, std::integral auto M>
   constexpr circuit pseudo_rom(const std::array<std::bitset<M>,N> &data, f64 co)
   {
     // N x M-bit ROM
@@ -2897,7 +2897,7 @@ namespace hcm {
   template<u64 N, u64 HARDD>
   inline constexpr circuit UMOD = remainder_divide_by_constant<N,HARDD>(OUTCAP); // unsigned N-bit % HARDD
 
-  template<u64 N, u64 M>
+  template<std::integral auto N, std::integral auto M>
   constexpr circuit ROM(const std::array<std::bitset<M>,N> &data)
   {
     return pseudo_rom(data,OUTCAP);
@@ -3911,7 +3911,7 @@ namespace hcm {
       return {v,t,dest.ram_id()};
     }
 
-    template<ramtype U, u64 K>
+    template<ramtype U, std::integral auto K>
     void distribute(std::span<U,K> mem,
                     const std::array<std::array<i64,4>,K> &send,
                     u64 node,
@@ -3935,7 +3935,7 @@ namespace hcm {
       }
     }
 
-    template<ramtype U, u64 K>
+    template<ramtype U, std::integral auto K>
     arr<val,K> distribute(std::span<U,K> mem, const std::tuple<T,u64> &vt)
     {
       static_assert(K!=0);
@@ -4241,14 +4241,14 @@ namespace hcm {
       return distribute(std::span(mem),std::move(*this).get_vt());
     }
 
-    template<ramtype U, u64 M>
+    template<ramtype U, std::integral auto M>
     [[nodiscard]] auto distribute(const std::array<U,M> &mem) & // lvalue
     {
       static_assert(M!=0);
       return distribute(std::span(mem),get_vt());
     }
 
-    template<ramtype U, u64 M>
+    template<ramtype U, std::integral auto M>
     [[nodiscard]] auto distribute(const std::array<U,M> &mem) && // rvalue
     {
       static_assert(M!=0);
