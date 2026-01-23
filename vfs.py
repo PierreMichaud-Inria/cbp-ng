@@ -5,7 +5,7 @@ import math
 
 # reference core
 IPCcbp0 = 8
-CPIcbp0 = 0.0283
+CPIcbp0 = 0.0315
 EPIcbp0 = 1000
 
 # technology parameter (frequency vs voltage)
