@@ -3,6 +3,7 @@
 #define USE_META
 #define RESET_UBITS
 
+#include "../cbp.hpp"
 #include "../harcom.hpp"
 #include "common.hpp"
 

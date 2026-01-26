@@ -1,3 +1,4 @@
+#include "../cbp.hpp"
 #include "../harcom.hpp"
 
 using namespace hcm;

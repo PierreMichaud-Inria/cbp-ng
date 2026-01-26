@@ -1,11 +1,11 @@
 #include <cstdint>
 
-#include <cinttypes>
 #include <iostream>
 #include <functional>
-#include <tuple>
 #include "trace_reader.hpp"
 #include "harcom.hpp"
+
+#pragma once
 
 using namespace hcm;
 
