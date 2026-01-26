@@ -95,7 +95,7 @@ energy-efficiency, and implementation complexity as part of a
 "Voltage-Frequency-Scaled Speedup" (a.k.a. VFS) score. Pierre Michaud has
 written [a paper available on the competition's github
 repository](https://github.com/AmpereComputing/cbp-ng/blob/main/docs/vfs.pdf)
-explaining this scoring to help contestants gain intuition for it.
+explaining this scoring to help participants gain intuition for it.
 
 Though we have attempted to ensure this scoring mechanism is aligned with
 real-world design constraints and you are heavily encouraged to use your
@@ -111,7 +111,12 @@ boundaries of energy-efficient and high-performance branch prediction.
 The CBP-NG Simulator and HARCOM require either GCC version 12 or later or Clang
 version 19 or later.
 
-It is tested on Linux (Ubuntu), MacOS, and Windows (Ubuntu-based WSL).
+The simulator and HARCOM are tested on Linux (Ubuntu), MacOS, and Windows
+(Ubuntu-based WSL).
+
+If you are familiar with
+[`nix-shell`](https://nix.dev/manual/nix/2.18/command-ref/nix-shell), this
+repository contains a shell.nix containing the simulator's dependencies.
 
 ### Compiling
 
@@ -139,6 +144,9 @@ and then compile as:
 ```console
 ./compile cbp -DPREDICTOR="my_predictor<>"
 ```
+
+There is also a simple CMakeLists.txt file checked in if you prefer to use
+cmake.
 
 ### Simulating
 
