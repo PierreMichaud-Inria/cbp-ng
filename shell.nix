@@ -1,15 +1,21 @@
 { pkgs ? import (builtins.fetchTarball {
-    name = "nixpkgs_24.11_2025-05-05";
-    url = "https://github.com/NixOS/nixpkgs/archive/5b35d248e9206c1f3baf8de6a7683fee126364aa.tar.gz";
-    sha256 = "11sih5m3cqmc9dfsjqj51pn3f26bjbhx1d0pgm7sggyh68wllfrm";
+    name = "nixpkgs_25.11_2026-01-26";
+    url = "https://github.com/NixOS/nixpkgs/archive/1cd347bf3355fce6c64ab37d3967b4a2cb4b878c.tar.gz";
+    sha256 = "1zn1lsafn62sz6azx6j735fh4vwwghj8cc9x91g5sx2nrg23ap9k";
   }) {} }:
 
 pkgs.mkShell {
   nativeBuildInputs = with pkgs.buildPackages; [
+    clang
+    clang-tools
+    cmake
+    gawk
     gcc
+    gdb
     git
     parallel
     python3
+    libcxx
     zlib
   ];
 }
